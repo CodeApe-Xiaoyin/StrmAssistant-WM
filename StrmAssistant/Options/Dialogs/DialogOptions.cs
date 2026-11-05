@@ -175,10 +175,6 @@ namespace StrmAssistant.Options.Dialogs
         [DisplayName("下载加速前缀")]
         [Description("GitHub 下载慢时填，例如 https://ghfast.top ；已配置代理一般不用填。")]
         public string GitHubProxy { get; set; } = string.Empty;
-
-        [DisplayName("GitHub 令牌")]
-        [Description("可选。仓库是公开的，不填也能更新；只有频繁检查被 GitHub 限流时才需要。")]
-        public string GitHubToken { get; set; } = string.Empty;
     }
 
     public class MemoryGuardDialog : EditableOptionsBase

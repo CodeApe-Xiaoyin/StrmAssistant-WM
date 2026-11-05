@@ -26,7 +26,6 @@ namespace StrmAssistant.ScheduledTask
     public class UpdatePluginTask : IScheduledTask
     {
         internal const string Repo = "CodeApe-Xiaoyin/StrmAssistant-WM";
-        private static string LatestReleaseUrl => "https://api.github.com/repos/" + Repo + "/releases/latest";
 
         /// <summary>允许解压到插件目录的文件（防止压缩包里有 ../ 之类的路径）。</summary>
         private static readonly string[] AllowedPrefixes = { "StrmAssistantLite.dll", "StrmAssistantDeps/", "zh/", "zh-hant/" };
@@ -77,17 +76,18 @@ namespace StrmAssistant.ScheduledTask
                 // 走插件自己的 HTTP 客户端：填了代理地址就经代理访问 GitHub
                 using var http = Common.PluginHttp.Create(TimeSpan.FromMinutes(5));
                 http.DefaultRequestHeaders.UserAgent.ParseAdd("StrmAssistantLite/" + Plugin.Instance.CurrentVersion);
-                if (!string.IsNullOrWhiteSpace(about.GitHubToken))
-                    http.DefaultRequestHeaders.Authorization =
-                        new System.Net.Http.Headers.AuthenticationHeaderValue("token", about.GitHubToken.Trim());
 
-                var json = await http.GetStringAsync(LatestReleaseUrl, cancellationToken).ConfigureAwait(false);
-                var release = _jsonSerializer.DeserializeFromString<ApiResponseInfo>(json);
+                // 不走 api.github.com：未登录每小时只有 60 次，代理出口 IP 常被别人用光（实测 403 rate limit）。
+                // 改用 github.com 的 releases/latest 跳转拿版本号，再按固定文件名直接下载。
+                var latest = await http.GetAsync("https://github.com/" + Repo + "/releases/latest", cancellationToken).ConfigureAwait(false);
+                latest.EnsureSuccessStatusCode();
+                var finalUrl = latest.RequestMessage?.RequestUri?.ToString() ?? string.Empty;
+                var tag = finalUrl.Contains("/releases/tag/") ? Uri.UnescapeDataString(finalUrl.Substring(finalUrl.LastIndexOf('/') + 1)) : null;
                 progress.Report(10);
 
                 var current = ParseVersion(Plugin.Instance.CurrentVersion);
-                var remote = ParseVersion(release?.tag_name);
-                if (remote == null) throw new Exception("最新 Release 的版本号无法识别：" + release?.tag_name);
+                var remote = ParseVersion(tag);
+                if (remote == null) throw new Exception("拿不到最新版本号（" + finalUrl + "）");
 
                 if (!IsNewer(current, remote))
                 {
@@ -97,16 +97,24 @@ namespace StrmAssistant.ScheduledTask
                     return;
                 }
 
-                var asset = PickAsset(release.assets, _serverApplicationHost.ApplicationVersion);
-                if (asset == null)
-                    throw new Exception("Release " + release.tag_name + " 里没有适合 Emby " + _serverApplicationHost.ApplicationVersion + " 的安装包");
+                byte[] bytes = null;
+                string picked = null;
+                foreach (var name in AssetCandidates(_serverApplicationHost.ApplicationVersion))
+                {
+                    var url = "https://github.com/" + Repo + "/releases/download/" + Uri.EscapeDataString(tag) + "/" + name;
+                    if (!string.IsNullOrWhiteSpace(about.GitHubProxy))
+                        url = about.GitHubProxy.Trim().TrimEnd('/') + "/" + url;
+                    using var resp = await http.GetAsync(url, cancellationToken).ConfigureAwait(false);
+                    if (resp.StatusCode == System.Net.HttpStatusCode.NotFound) continue;
+                    resp.EnsureSuccessStatusCode();
+                    bytes = await resp.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
+                    picked = name;
+                    break;
+                }
 
-                var url = asset.browser_download_url;
-                if (!string.IsNullOrWhiteSpace(about.GitHubProxy))
-                    url = about.GitHubProxy.Trim().TrimEnd('/') + "/" + url;
-                _logger.Info("UpdatePlugin - 发现新版本 {0}，下载 {1}", remote, asset.name);
-
-                var bytes = await http.GetByteArrayAsync(url, cancellationToken).ConfigureAwait(false);
+                if (bytes == null)
+                    throw new Exception("Release " + tag + " 里没有适合 Emby " + _serverApplicationHost.ApplicationVersion + " 的安装包");
+                _logger.Info("UpdatePlugin - 发现新版本 {0}，已下载 {1}（{2} KB）", remote, picked, bytes.Length / 1024);
                 progress.Report(70);
 
                 var written = Install(bytes, _applicationPaths.PluginsPath);
@@ -137,6 +145,7 @@ namespace StrmAssistant.ScheduledTask
 #endif
                 });
                 _ = Plugin.NotificationApi.SendMessageToAdmins("[神医助手] 更新失败：" + e.Message, 1000);
+                throw; // 让 Emby 把这次运行记为失败，首页那一行会标红
             }
 
             progress.Report(100);
@@ -157,6 +166,13 @@ namespace StrmAssistant.ScheduledTask
         {
             static Version Norm(Version v) => new Version(v.Major, v.Minor, Math.Max(0, v.Build));
             return current == null || Norm(remote).CompareTo(Norm(current)) > 0;
+        }
+
+        /// <summary>按优先顺序列出要尝试下载的安装包文件名：先找对应 Emby 主次版本的，再找通用包。</summary>
+        internal static IEnumerable<string> AssetCandidates(Version emby)
+        {
+            if (emby != null) yield return "StrmAssistantLite-emby" + emby.Major + "." + emby.Minor + ".zip";
+            yield return "StrmAssistantLite.zip";
         }
 
         /// <summary>

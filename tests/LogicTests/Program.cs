@@ -686,6 +686,8 @@ namespace LogicTests
                                          StrmAssistant.ScheduledTask.UpdatePluginTask.PickAsset(assets, new Version(4, 9, 1, 80))?.name == "StrmAssistantLite-emby4.9.zip" &&
                                          StrmAssistant.ScheduledTask.UpdatePluginTask.PickAsset(assets, new Version(4, 1, 0))?.name == null);
                 assets.Add(new() { name = "StrmAssistantLite.zip", browser_download_url = "https://x/all.zip" });
+                Check("更新 直接下载的文件名顺序", string.Join(",", StrmAssistant.ScheduledTask.UpdatePluginTask.AssetCandidates(new Version(4, 10, 0, 40))) ==
+                                                "StrmAssistantLite-emby4.10.zip,StrmAssistantLite.zip");
                 Check("更新 没有对应版本时用通用包", StrmAssistant.ScheduledTask.UpdatePluginTask.PickAsset(assets, new Version(4, 11, 0))?.name == "StrmAssistantLite.zip");
 
                 var dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "sa-upd-" + Guid.NewGuid().ToString("N"));
