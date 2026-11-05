@@ -61,7 +61,8 @@ namespace StrmAssistant.Web.Service
                     "MarkPreviousEpisodesPlayedTask", "MemoryWatchdogTask"
                 };
                 taskCount = Plugin.TaskManager?.ScheduledTasks?
-                    .Count(w => known.Contains(w.ScheduledTask?.Key)) ?? 0;
+                    .Count(w => known.Contains(w.ScheduledTask?.Key) &&
+                                w.ScheduledTask.GetType().Assembly == typeof(HealthService).Assembly) ?? 0;
             }
             catch (Exception e)
             {

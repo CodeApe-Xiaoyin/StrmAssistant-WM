@@ -155,7 +155,7 @@ namespace StrmAssistant.Options
 
             foreach (var (key, icon, dialog) in Tasks)
             {
-                var worker = workers.FirstOrDefault(w => w.ScheduledTask?.Key == key);
+                var worker = workers.FirstOrDefault(w => OptionDialogs.IsOurTask(w, key));
                 if (worker == null) continue;
 
                 var row = Row(icon, worker.Name, TaskStatusText(worker));

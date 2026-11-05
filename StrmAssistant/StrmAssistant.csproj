@@ -3,8 +3,8 @@
     <!-- EmbyTarget 默认值在 Directory.Build.props；4.8 运行在 .NET 6 上 -->
     <TargetFramework Condition="'$(EmbyTarget)' == '4.8'">net6.0</TargetFramework>
     <TargetFramework Condition="'$(EmbyTarget)' != '4.8'">net8.0</TargetFramework>
-    <AssemblyVersion>2.2.0.0</AssemblyVersion>
-    <FileVersion>2.2.0.0</FileVersion>
+    <AssemblyVersion>2.2.1.0</AssemblyVersion>
+    <FileVersion>2.2.1.0</FileVersion>
     <CopyLocalLockFileAssemblies>True</CopyLocalLockFileAssemblies>
     <IncludeSourceRevisionInInformationalVersion>true</IncludeSourceRevisionInInformationalVersion>
     <AssemblyName>$(MSBuildProjectName)Lite</AssemblyName>

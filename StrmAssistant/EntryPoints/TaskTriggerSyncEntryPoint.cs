@@ -53,6 +53,8 @@ namespace StrmAssistant.EntryPoints
                 {
                     var key = worker.ScheduledTask?.Key;
                     if (key == null || !desired.TryGetValue(key, out var want)) continue;
+                    // 其他插件（如 MediaInfoKeeper）可能有同 Key 的任务，不能动它们的触发器
+                    if (worker.ScheduledTask.GetType().Assembly != typeof(TaskTriggerSyncEntryPoint).Assembly) continue;
 
                     var current = (worker.Triggers ?? Array.Empty<TaskTriggerInfo>()).ToList();
                     var ours = current.Where(t => Same(t, want.trigger)).ToList();

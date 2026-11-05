@@ -112,11 +112,19 @@ namespace StrmAssistant.Options.Dialogs
             });
         }
 
+        /// <summary>
+        /// 是不是本插件的这个任务。只比 Key 不够：MediaInfoKeeper 也有 Key 为 UpdatePluginTask、MergeMultiVersionTask 的任务，
+        /// 只按 Key 找会拿到它的（生产实测：首页「更新插件」指向了 MediaInfoKeeper 的「01.更新插件」）。
+        /// </summary>
+        public static bool IsOurTask(IScheduledTaskWorker worker, string key) =>
+            worker?.ScheduledTask != null && worker.ScheduledTask.Key == key &&
+            worker.ScheduledTask.GetType().Assembly == typeof(OptionDialogs).Assembly;
+
         /// <summary>立即运行计划任务（按 Key）。返回提示文字。</summary>
         public static string RunTask(string command)
         {
             var key = command.Substring(TaskPrefix.Length);
-            var worker = Plugin.TaskManager?.ScheduledTasks?.FirstOrDefault(t => t.ScheduledTask?.Key == key);
+            var worker = Plugin.TaskManager?.ScheduledTasks?.FirstOrDefault(t => IsOurTask(t, key));
             if (worker == null) return "找不到任务 " + key;
             if (worker.State == TaskState.Running) return "「" + worker.Name + "」正在运行";
 
