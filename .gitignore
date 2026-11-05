@@ -1,0 +1,23 @@
+# 构建产物
+bin/
+obj/
+dist/
+*.user
+.vs/
+.idea/
+.DS_Store
+
+# Emby 自带的程序集：不随仓库分发，用 scripts/fetch-libs.sh 从你自己的 Emby 安装里取
+libs/
+
+# 本地测试资料（含内网地址、账号等，只在本机使用）
+docs/
+PORT-NOTES.md
+STATUS.md
+README-PORT.md
+scripts/*
+!scripts/build-emby.sh
+!scripts/fetch-libs.sh
+
+# 旧版英文说明（描述的是之前的单文件构建，已过时）
+README.en.md

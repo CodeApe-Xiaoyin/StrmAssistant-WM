@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>LogicTests</AssemblyName>
+    <RootNamespace>LogicTests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="StrmAssistantLite">
+      <HintPath>../../StrmAssistant/bin/Release/net8.0/StrmAssistantLite.dll</HintPath>
+    </Reference>
+    <Reference Include="TinyPinyin">
+      <HintPath>../../StrmAssistant/bin/Release/net8.0/TinyPinyin.dll</HintPath>
+    </Reference>
+    <Reference Include="ChineseConverter">
+      <HintPath>../../StrmAssistant/bin/Release/net8.0/ChineseConverter.dll</HintPath>
+    </Reference>
+    <Reference Include="Emby.Web.GenericEdit">
+      <HintPath>../../StrmAssistant/bin/Release/net8.0/Emby.Web.GenericEdit.dll</HintPath>
+    </Reference>
+    <Reference Include="MediaBrowser.Model">
+      <HintPath>../../StrmAssistant/bin/Release/net8.0/MediaBrowser.Model.dll</HintPath>
+    </Reference>
+    <Reference Include="MediaBrowser.Common">
+      <HintPath>../../StrmAssistant/bin/Release/net8.0/MediaBrowser.Common.dll</HintPath>
+    </Reference>
+    <Reference Include="MediaBrowser.Controller">
+      <HintPath>../../StrmAssistant/bin/Release/net8.0/MediaBrowser.Controller.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+</Project>

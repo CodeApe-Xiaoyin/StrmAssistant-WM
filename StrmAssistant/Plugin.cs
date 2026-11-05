@@ -1,0 +1,1304 @@
+using System.Threading.Tasks;
+using Emby.Media.Common.Extensions;
+using Emby.Web.GenericEdit.Common;
+using Emby.Web.GenericEdit.Elements;
+using Emby.Web.GenericEdit.Elements.List;
+using MediaBrowser.Common;
+using MediaBrowser.Common.Configuration;
+using MediaBrowser.Common.Net;
+using MediaBrowser.Common.Plugins;
+using MediaBrowser.Controller;
+using MediaBrowser.Controller.Configuration;
+using MediaBrowser.Controller.Entities;
+using MediaBrowser.Controller.Entities.Audio;
+using MediaBrowser.Controller.Entities.Movies;
+using MediaBrowser.Controller.Entities.TV;
+using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.MediaEncoding;
+using MediaBrowser.Controller.Notifications;
+using MediaBrowser.Controller.Persistence;
+using MediaBrowser.Controller.Plugins;
+using MediaBrowser.Controller.Providers;
+using MediaBrowser.Controller.Session;
+using MediaBrowser.Model.Configuration;
+using MediaBrowser.Model.Plugins.UI;
+using MediaBrowser.Model.Plugins.UI.Views;
+using StrmAssistant.Options.UI;
+using MediaBrowser.Model.Drawing;
+using MediaBrowser.Model.Entities;
+using MediaBrowser.Model.Events;
+using MediaBrowser.Model.Globalization;
+using MediaBrowser.Model.IO;
+using MediaBrowser.Model.Logging;
+using MediaBrowser.Model.Plugins;
+using MediaBrowser.Model.Serialization;
+using MediaBrowser.Model.Tasks;
+using StrmAssistant.Common;
+using StrmAssistant.IntroSkip;
+using StrmAssistant.Options;
+using StrmAssistant.Properties;
+using StrmAssistant.ScheduledTask;
+using StrmAssistant.Web.Helper;
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using static StrmAssistant.Options.GeneralOptions;
+using static StrmAssistant.Options.IntroSkipOptions;
+using static StrmAssistant.Options.MediaInfoExtractOptions;
+using static StrmAssistant.Options.MetadataEnhanceOptions;
+using static StrmAssistant.Options.Utility;
+
+namespace StrmAssistant
+{
+    public class Plugin: BasePluginSimpleUI<PluginOptions>, IHasThumbImage, IHasUIPages
+    {
+        public static Plugin Instance { get; private set; }
+        public static LibraryApi LibraryApi { get; private set; }
+        public static MediaInfoApi MediaInfoApi { get; private set; }
+        public static ChapterApi ChapterApi { get; private set; }
+        public static FingerprintApi FingerprintApi { get; private set; }
+        public static NotificationApi NotificationApi { get; private set; }
+        public static SubtitleApi SubtitleApi { get; private set; }
+        public static PlaySessionMonitor PlaySessionMonitor { get; private set; }
+        public static MetadataApi MetadataApi { get; private set; }
+
+        public static IHttpClient HttpClient { get; private set; }
+
+        /// <summary>弹窗保存时把 Emby 传回的 JSON 还原成对象用。</summary>
+        public static IJsonSerializer JsonSerializer { get; private set; }
+
+        public static ILibraryManager LibraryManager { get; private set; }
+
+        public static IProviderManager ProviderManager { get; private set; }
+
+        public static MediaBrowser.Controller.Session.ISessionManager SessionManager { get; private set; }
+
+        public static MediaBrowser.Model.Activity.IActivityManager ActivityManager { get; private set; }
+
+        public static IUserDataManager UserDataManager { get; private set; }
+
+        public static IUserManager UserManager { get; private set; }
+
+        public static MediaBrowser.Model.Tasks.ITaskManager TaskManager { get; private set; }
+
+        public static MediaBrowser.Common.Updates.IInstallationManager InstallationManager { get; private set; }
+
+        public static IMediaEncoder MediaEncoder { get; private set; }
+
+        public static MediaBrowser.Controller.MediaEncoding.IMediaProbeManager MediaProbeManager { get; private set; }
+
+        public static IFfmpegManager FfmpegManager { get; private set; }
+
+        public static IItemRepository ItemRepository { get; private set; }
+
+
+        public static INotificationManager NotificationManager { get; private set; }
+
+
+        public static MediaBrowser.Model.IO.IFileSystem FileSystem { get; private set; }
+        public static VideoThumbnailApi VideoThumbnailApi { get; private set; }
+
+        private readonly Guid _id = new Guid("63c322b7-a371-41a3-b11f-04f8418b37d8");
+
+        public readonly ILogger Logger;
+        public readonly IApplicationHost ApplicationHost;
+        public readonly IApplicationPaths ApplicationPaths;
+
+        private readonly ILibraryManager _libraryManager;
+        private readonly IUserManager _userManager;
+        private readonly IUserDataManager _userDataManager;
+        private readonly IProviderManager _providerManager;
+        private readonly IFileSystem _fileSystem;
+        private readonly ITaskManager _taskManager;
+
+        private bool _currentSuppressOnOptionsSaved;
+        private int _currentMaxConcurrentCount;
+        private int _currentTier2ConcurrentCount;
+        private bool _currentPersistMediaInfo;
+        private bool _currentMediaInfoRestoreMode;
+        private bool _currentCatchupMode;
+        private DateTimeOffset _lastCatchupEnqueue = DateTimeOffset.MinValue;
+        private bool _currentEnableIntroSkip;
+        private bool _currentUnlockIntroSkip;
+        private bool _currentMergeMultiVersion;
+
+        private static readonly HashSet<string> ExcludedCollectionTypes = new HashSet<string>
+        {
+            CollectionType.Books.ToString(),
+            CollectionType.Photos.ToString(),
+            CollectionType.Games.ToString(),
+            CollectionType.LiveTv.ToString(),
+            CollectionType.Playlists.ToString(),
+            CollectionType.BoxSets.ToString()
+        };
+
+        public Plugin(IApplicationHost applicationHost, IApplicationPaths applicationPaths, ILogManager logManager,
+            IFileSystem fileSystem, ILibraryManager libraryManager, ISessionManager sessionManager,
+            IItemRepository itemRepository, INotificationManager notificationManager, ILibraryMonitor libraryMonitor,
+            IMediaSourceManager mediaSourceManager, IMediaMountManager mediaMountManager,
+            IProviderManager providerManager, IMediaProbeManager mediaProbeManager,
+            ILocalizationManager localizationManager, IUserManager userManager, IUserDataManager userDataManager,
+            IFfmpegManager ffmpegManager, IMediaEncoder mediaEncoder, IJsonSerializer jsonSerializer,
+            IHttpClient httpClient, IServerApplicationHost serverApplicationHost,
+            IServerConfigurationManager configurationManager, ITaskManager taskManager,
+            IImageExtractionManager imageExtractionManager, IServerApplicationPaths serverApplicationPaths,
+            MediaBrowser.Model.Activity.IActivityManager activityManager,
+            MediaBrowser.Common.Updates.IInstallationManager installationManager) : base(applicationHost)
+        {
+            Instance = this;
+            JsonSerializer = jsonSerializer;
+            Logger = logManager.GetLogger(Name);
+            Logger.Info("Plugin is getting loaded.");
+            ApplicationHost = applicationHost;
+            ApplicationPaths = applicationPaths;
+            // 依赖（Harmony / TinyPinyin）按 Emby 实际的插件目录再找一次：非 Docker 安装插件目录不在 /config/plugins
+            try { Common.Hooks.DependencyBootstrap.AddPluginsDirectory(applicationPaths?.PluginsPath); }
+            catch { /* 找不到依赖时挂钩会如实报告失败 */ }
+
+            _libraryManager = libraryManager;
+            _userManager = userManager;
+            _userDataManager = userDataManager;
+            _providerManager = providerManager;
+            _fileSystem = fileSystem;
+            _taskManager = taskManager;
+            InstallationManager = installationManager;
+
+            _currentMaxConcurrentCount = GetOptions().GeneralOptions.MaxConcurrentCount;
+            _currentPersistMediaInfo = GetOptions().MediaInfoExtractOptions.PersistMediaInfoMode !=
+                                       PersistMediaInfoOption.None.ToString();
+            _currentMediaInfoRestoreMode = GetOptions().MediaInfoExtractOptions.PersistMediaInfoMode ==
+                                           PersistMediaInfoOption.Restore.ToString();
+            _currentCatchupMode = GetOptions().GeneralOptions.CatchupMode;
+            _currentEnableIntroSkip = GetOptions().IntroSkipOptions.EnableIntroSkip;
+            _currentUnlockIntroSkip = GetOptions().IntroSkipOptions.UnlockIntroSkip;
+            _currentMergeMultiVersion = GetOptions().ExperienceEnhanceOptions.MergeMultiVersion;
+            InitializeOptionCache();
+            // 挂钩在部分环境下会导致进程退出，改为按需启用（见 PORT-NOTES）
+
+
+            // 旧配置迁移（界面合并掉的重复选项）
+            try
+            {
+                if (MigrateLegacyOptions(GetOptions())) SavePluginOptionsSuppress();
+            }
+            catch (System.Exception e)
+            {
+                Logger?.Info("旧配置迁移失败（忽略）: " + e.Message);
+            }
+
+            // 构造期禁止 OnOptionsSaved 参与（SavePluginOptionsSuppress 会回调进来）
+            if (GetOptions().AboutOptions.DebugMode)
+            {
+                DebugMode = true;
+
+                // 这里只是把"一次性开关"清掉，保存失败不应该影响插件加载
+                try
+                {
+                    GetOptions().AboutOptions.DebugMode = false;
+                    SavePluginOptionsSuppress();
+                }
+                catch (System.Exception e)
+                {
+                    Logger?.Info("DebugMode - 清理配置失败（忽略）: " + e.Message);
+                }
+            }
+            else if (Debugger.IsAttached)
+            {
+                DebugMode = true;
+            }
+
+            // 启动时按配置应用全局代理（.NET 在创建 Handler 时读取 DefaultProxy）
+            try { Common.GlobalProxyService.Apply(); }
+            catch (System.Exception e) { Logger?.Info("GlobalProxy - 应用失败: " + e.Message); }
+
+            try { Common.FfmpegPathOverride.Apply(Logger); }
+            catch (System.Exception e) { Logger?.Info("GlobalProxy - 初始化失败: " + e.Message); }
+
+            try
+            {
+                var hookResult = Common.Hooks.GlobalProxyPatches.TryInstall();
+                Logger?.Info("GlobalProxy - 挂钩结果: " + hookResult);
+
+                var updateHook = Common.Hooks.PluginUpdatePatches.TryInstall();
+                Logger?.Info("PluginUpdateFilter - 挂钩结果: " + updateHook);
+
+                Logger?.Info("PlayProgressScope - 挂钩结果: " + Common.Hooks.UserDataKeyPatches.TryInstall());
+
+                // 「阻止合集自动创建」改在 MovieDbProviderPatch.ProcessMainInfo 里处理：
+                // 以前挂的 CollectionManager.AddCollection 只在「手动新建合集」时被调用，挡错了路径。
+                Logger?.Info("DeepDelete - 挂钩结果: " + Common.Hooks.DeepDeletePatch.TryInstall());
+                Logger?.Info("StrmDirectLink - 挂钩结果: " + Common.Hooks.StrmDirectLinkPatch.TryInstall());
+                Logger?.Info("ExtractOnBrowse - 挂钩结果: " + Common.MediaInfoPrefetch.TryInstallBrowseHook());
+
+                Logger?.Info("ChineseSearch - 挂钩结果: " + Common.Hooks.SearchEnhancementPatch.TryInstall());
+                Common.SearchIndex.Initialize(libraryManager);
+                if (GetOptions().ExperienceEnhanceOptions.EnhanceChineseSearch) Common.SearchIndex.EnsureBuilding(30000);
+
+                Logger?.Info("MultiVersionDisplay - 挂钩结果: " + Common.Hooks.MultiVersionDisplayPatch.TryInstall());
+
+                Logger?.Info("SeriesMerge - 挂钩结果: " + Common.Hooks.SeriesMergePatch.TryInstall());
+
+                Logger?.Info("MovieDbPatch - 挂钩结果: " + Common.Hooks.MovieDbProviderPatch.TryInstall());
+            }
+            catch (System.Exception e) { Logger?.Info("GlobalProxy - 挂钩异常: " + e.Message); }
+
+            _optionsSavedReady = true;
+
+            LibraryApi = new LibraryApi(libraryManager, providerManager, fileSystem, mediaMountManager, userManager);
+            MediaInfoApi = new MediaInfoApi(libraryManager, fileSystem, providerManager, mediaSourceManager,
+                itemRepository, jsonSerializer, libraryMonitor);
+            ChapterApi = new ChapterApi(libraryManager, itemRepository);
+            FingerprintApi = new FingerprintApi(libraryManager, fileSystem, applicationPaths, ffmpegManager,
+                mediaEncoder, mediaMountManager, jsonSerializer, itemRepository, serverApplicationHost);
+            PlaySessionMonitor = new PlaySessionMonitor(libraryManager, userManager, sessionManager);
+            NotificationApi = new NotificationApi(notificationManager, userManager, sessionManager);
+            SubtitleApi = new SubtitleApi(libraryManager, fileSystem, mediaProbeManager, localizationManager,
+                itemRepository);
+            HttpClient = httpClient;
+            LibraryManager = libraryManager;
+            ProviderManager = providerManager;
+            SessionManager = sessionManager;
+            ActivityManager = activityManager;
+            UserDataManager = userDataManager;
+            UserManager = userManager;
+            TaskManager = taskManager;
+            MediaEncoder = mediaEncoder;
+            MediaProbeManager = mediaProbeManager;
+            FfmpegManager = ffmpegManager;
+
+            try
+            {
+                Logger?.Info("FfmpegPath - 启动应用: " + Common.FfmpegPathOverride.Apply(Logger));
+                Common.FfmpegPathOverride.ApplyWithRetry(Logger);
+            }
+            catch (System.Exception e) { Logger?.Info("FfmpegPath - 启动应用异常: " + e.Message); }
+            ItemRepository = itemRepository;
+            NotificationManager = notificationManager;
+            FileSystem = fileSystem;
+            MetadataApi = new MetadataApi(libraryManager, fileSystem, configurationManager, localizationManager,
+                jsonSerializer, httpClient);
+            VideoThumbnailApi = new VideoThumbnailApi(libraryManager, fileSystem, imageExtractionManager, itemRepository,
+                mediaMountManager, serverApplicationPaths, libraryMonitor, ffmpegManager);
+            ShortcutMenuHelper.Initialize(configurationManager);
+
+            if (_currentCatchupMode) QueueManager.Initialize();
+            if (_currentEnableIntroSkip) PlaySessionMonitor.Initialize();
+
+            _libraryManager.ItemAdded += OnItemAdded;
+            Common.MediaInfoPrefetch.Initialize(sessionManager);
+            _libraryManager.ItemRemoved += OnItemRemoved;
+            _providerManager.RefreshCompleted += OnRefreshCompleted;
+            _userManager.UserCreated += OnUserCreated;
+            _userManager.UserDeleted += OnUserDeleted;
+            _userManager.UserConfigurationUpdated += OnUserConfigurationUpdated;
+            _userDataManager.UserDataSaved += OnUserDataSaved;
+            CollectionFolder.LibraryOptionsUpdated += OnLibraryOptionsUpdated;
+        }
+
+        private void OnRefreshCompleted(object sender, GenericEventArgs<RefreshProgressInfo> e)
+        {
+            if (_libraryManager.IsScanRunning) return;
+
+            if (_currentMergeMultiVersion && e.Argument.Item.IsTopParent)
+            {
+                var library = e.Argument.CollectionFolders.OfType<CollectionFolder>().FirstOrDefault();
+
+                if (library != null && (library.CollectionType == CollectionType.Movies.ToString() ||
+                                        library.CollectionType is null))
+                {
+                    MergeMultiVersionTask.CurrentScanLibrary.Value = library;
+
+                    var mergeMoviesTask = _taskManager.ScheduledTasks.FirstOrDefault(t =>
+                        t.ScheduledTask is MergeMultiVersionTask);
+
+                    if (mergeMoviesTask != null)
+                    {
+                        _ = _taskManager.Execute(mergeMoviesTask, new TaskOptions());
+                    }
+                }
+            }
+        }
+
+        private void OnUserCreated(object sender, GenericEventArgs<User> e)
+        {
+            LibraryApi.FetchUsers();
+        }
+
+        private void OnUserDeleted(object sender, GenericEventArgs<User> e)
+        {
+            LibraryApi.FetchUsers();
+        }
+        
+        private void OnUserConfigurationUpdated(object sender, GenericEventArgs<User> e)
+        {
+            if (e.Argument.Policy.IsAdministrator) LibraryApi.FetchAdminOrderedViews();
+        }
+
+        private void OnLibraryOptionsUpdated(object sender, GenericEventArgs<Tuple<CollectionFolder, LibraryOptions>> e)
+        {
+            var library = e.Argument.Item1;
+
+            if (!LibraryApi.ExcludedCollectionTypes.Contains(library.CollectionType))
+            {
+                LibraryApi.UpdateLibraryPathsInScope();
+
+                if (library.CollectionType == CollectionType.TvShows.ToString() || library.CollectionType is null)
+                {
+                    PlaySessionMonitor.UpdateLibraryPathsInScope();
+                    FingerprintApi.UpdateLibraryPathsInScope();
+
+                    if (_currentUnlockIntroSkip)
+                        FingerprintApi.UpdateLibraryIntroDetectionFingerprintLength();
+
+                    if (_currentMergeMultiVersion)
+                        LibraryApi.EnsureLibraryEnabledAutomaticSeriesGrouping();
+                }
+            }
+        }
+
+        private async void OnItemAdded(object sender, ItemChangeEventArgs e)
+        {
+            try
+            {
+                var deserializeResult = false;
+
+                if (_currentPersistMediaInfo && e.Item is Video)
+                {
+                    deserializeResult = LibraryApi.HasMediaInfo(e.Item);
+
+                    var directoryService = new DirectoryService(Logger, _fileSystem);
+
+                    if (!deserializeResult)
+                    {
+                        deserializeResult = await MediaInfoApi.DeserializeMediaInfo(e.Item, directoryService,
+                            "OnItemAdded Restore", true).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        _ = MediaInfoApi.SerializeMediaInfo(e.Item.InternalId, directoryService, true,
+                            "OnItemAdded Overwrite").ConfigureAwait(false);
+                    }
+                }
+
+                if (_currentCatchupMode && (e.Item is Video || e.Item is Audio))
+                {
+                    if (_currentUnlockIntroSkip && IsCatchupTaskSelected(CatchupTask.Fingerprint) &&
+                        e.Item is Episode && FingerprintApi.IsLibraryInScope(e.Item) &&
+                        (!deserializeResult || FingerprintApi.IsExtractNeeded(e.Item)))
+                    {
+                        QueueManager.FingerprintItemQueue.Enqueue(e.Item);
+                    }
+                    else
+                    {
+                        if (IsCatchupTaskSelected(CatchupTask.MediaInfo) && !deserializeResult)
+                        {
+                            QueueManager.MediaInfoExtractItemQueue.Enqueue(e.Item);
+                        }
+
+                        if (IsCatchupTaskSelected(CatchupTask.IntroSkip) &&
+                            e.Item is Episode && PlaySessionMonitor.IsLibraryInScope(e.Item))
+                        {
+                            if (!deserializeResult)
+                            {
+                                QueueManager.MediaInfoExtractItemQueue.Enqueue(e.Item);
+                            }
+                            else if (e.Item is Episode episode && ChapterApi.SeasonHasIntroCredits(episode))
+                            {
+                                QueueManager.IntroSkipItemQueue.Enqueue(episode);
+                            }
+                        }
+                    }
+
+                    if (IsCatchupTaskSelected(CatchupTask.EpisodeRefresh) && e.Item is Episode ep &&
+                        LibraryApi.IsPremiereDateInScope(ep, DateTimeOffset.UtcNow.AddDays(-90), false))
+                    {
+                        QueueManager.EpisodeRefreshItemQueue.Enqueue(ep);
+                    }
+                }
+
+                if (e.Item is Movie || e.Item is Series || e.Item is Episode)
+                {
+                    NotificationApi.FavoritesUpdateSendNotification(e.Item);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Debug(ex.Message);
+                Logger.Debug(ex.StackTrace);
+            }
+        }
+
+        private void OnItemRemoved(object sender, ItemChangeEventArgs e)
+        {
+            if (!_currentMediaInfoRestoreMode && e.Item is Video)
+            {
+                var directoryService = new DirectoryService(Logger, _fileSystem);
+                MediaInfoApi.DeleteMediaInfoJson(e.Item, directoryService, "Item Removed Event");
+            }
+        }
+
+        private void OnUserDataSaved(object sender, UserDataSaveEventArgs e)
+        {
+            // 播放进度达到阈值 → 立即标记前集已看（PRO 用播放事件，这里用官方 UserDataSaved 事件）
+            try
+            {
+                var ui = GetOptions().ExperienceEnhanceOptions?.UIFunctionOptions;
+                if (ui != null && ui.MarkPreviousEpisodesPlayed && e.Item is MediaBrowser.Controller.Entities.TV.Episode episode &&
+                    e.UserData != null && !e.UserData.Played)
+                {
+                    var threshold = ui.MarkPreviousEpisodesPlayedThreshold <= 0 ? 90 : ui.MarkPreviousEpisodesPlayedThreshold;
+
+                    if (Common.EpisodeProgressPolicy.ReachedThreshold(e.UserData.PlaybackPositionTicks,
+                            episode.RunTimeTicks, threshold))
+                    {
+                        var user = e.User;
+
+                        if (user != null)
+                        {
+                            var manager = _libraryManager;
+                            var dataManager = _userDataManager;
+                            var log = Logger;
+                            System.Threading.Tasks.Task.Run(() =>
+                                Common.PreviousEpisodeMarker.MarkAsync(user, episode, manager, dataManager, log));
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Info("MarkPrevious(event) - failed: " + ex.Message);
+            }
+
+            if (e.UserData.IsFavorite)
+            {
+                // 「补漏最小间隔」：避免短时间大量入队
+                var minDelay = GetOptions().GeneralOptions.CatchupMinimumDelaySeconds;
+                if (minDelay > 0 &&
+                    (DateTimeOffset.UtcNow - _lastCatchupEnqueue).TotalSeconds < minDelay)
+                {
+                    Logger.Info("Catchup - 距上次入队不足 " + minDelay + " 秒，跳过: " + e.Item.Name);
+                    return;
+                }
+
+                _lastCatchupEnqueue = DateTimeOffset.UtcNow;
+                if (_currentUnlockIntroSkip && _currentCatchupMode && IsCatchupTaskSelected(CatchupTask.Fingerprint) &&
+                    FingerprintApi.IsLibraryInScope(e.Item) && (e.Item is Episode || e.Item is Series))
+                {
+                    QueueManager.FingerprintItemQueue.Enqueue(e.Item);
+                }
+                else if (_currentCatchupMode && IsCatchupTaskSelected(CatchupTask.MediaInfo))
+                {
+                    QueueManager.MediaInfoExtractItemQueue.Enqueue(e.Item);
+                }
+            }
+        }
+
+        public ImageFormat ThumbImageFormat => ImageFormat.Png;
+
+        public override string Description => "\u63d0\u53d6\u5a92\u4f53\u4fe1\u606f\u5e76\u589e\u5f3a\u7247\u5934\u8df3\u8fc7";
+
+        public override Guid Id => _id;
+
+        public sealed override string Name => "Strm Assistant";
+
+        public string CurrentVersion => Assembly.GetExecutingAssembly().GetName().Version?.ToString();
+
+        public string UserAgent => $"{Name}/{CurrentVersion}";
+
+        public CultureInfo DefaultUICulture => new CultureInfo("zh-CN");
+
+        public bool DebugMode;
+
+        public bool IsModSupported => false;
+
+        public Stream GetThumbImage()
+        {
+            var type = GetType();
+            return type.Assembly.GetManifestResourceStream(type.Namespace + ".Properties.thumb.png");
+        }
+
+        private TabbedPageController _tabbedPageController;
+
+        IReadOnlyCollection<IPluginUIPageController> IHasUIPages.UIPageControllers
+        {
+            get
+            {
+                if (_tabbedPageController == null) BuildTabbedPages();
+                return new IPluginUIPageController[] { _tabbedPageController };
+            }
+        }
+
+        /// <summary>兜底：动态下拉项为空时补空集合，避免保存回调里的 Any(...) 抛空引用。</summary>
+        private static void EnsureDynamicLists(object options)
+        {
+            if (options == null) return;
+            foreach (var prop in options.GetType().GetProperties())
+            {
+                if (prop.GetIndexParameters().Length != 0) continue;
+                var value = prop.GetValue(options);
+                if (value == null) continue;
+                foreach (var sub in value.GetType().GetProperties())
+                {
+                    if (!sub.CanRead || !sub.CanWrite || sub.GetIndexParameters().Length != 0) continue;
+                    if (sub.GetValue(value) != null) continue;
+                    var t = sub.PropertyType;
+                    if (!t.IsGenericType) continue;
+                    var def = t.GetGenericTypeDefinition();
+                    if (def != typeof(IEnumerable<>) && def != typeof(List<>)) continue;
+                    sub.SetValue(value, CreateCollectionValue(t));
+                }
+            }
+        }
+
+        /// <summary>
+        /// 按目标类型造一个空集合。
+        /// Emby 的序列化把 List&lt;T&gt; 还原成 T[]，直接 SetValue 会抛
+        /// "EditorSelectOption[] cannot be converted to List&lt;EditorSelectOption&gt;"，
+        /// 那个异常会让整个保存流程中断（选项只存在内存里，重启就丢）。
+        /// </summary>
+        private static object CreateCollectionValue(Type targetType)
+        {
+            var def = targetType.GetGenericTypeDefinition();
+            if (def == typeof(List<>)) return Activator.CreateInstance(targetType);
+
+            var elem = targetType.GetGenericArguments()[0];
+            return Array.CreateInstance(elem, 0);
+        }
+
+        /// <summary>把值转成目标集合类型；类型不兼容时返回 null 表示跳过。</summary>
+        private static object CoerceCollection(object value, Type targetType)
+        {
+            if (value == null || targetType.IsInstanceOfType(value)) return value;
+            if (!targetType.IsGenericType) return value;
+
+            var def = targetType.GetGenericTypeDefinition();
+            var elem = targetType.GetGenericArguments()[0];
+
+            if (def == typeof(List<>))
+            {
+                var listType = typeof(List<>).MakeGenericType(elem);
+                if (value is Array array)
+                {
+                    var list = (System.Collections.IList)Activator.CreateInstance(listType);
+                    foreach (var item in array) list.Add(item);
+                    return list;
+                }
+
+                var enumerable = value as System.Collections.IEnumerable;
+                if (enumerable != null)
+                {
+                    var list = (System.Collections.IList)Activator.CreateInstance(listType);
+                    foreach (var item in enumerable) list.Add(item);
+                    return list;
+                }
+            }
+
+            return value;
+        }
+
+        /// <summary>
+        /// 旧配置迁移：
+        ///   · 「刷新规则」(MetadataRefreshPreferences，PRO 兼容) 与「刷新哪些分集」(EpisodeRefreshScope) 重复，
+        ///     前者填了会覆盖后者。界面只留后者，所以把前者的值并过去后清空。
+        ///   · 代理协议单选 → 写进代理地址（见 ProxyConfig.MigrateLegacy）。
+        /// 返回是否有改动。
+        /// </summary>
+        internal static bool MigrateLegacyOptions(PluginOptions options)
+        {
+            var changed = false;
+            var meta = options?.MetadataEnhanceOptions;
+            if (meta != null && !string.IsNullOrWhiteSpace(meta.MetadataRefreshPreferences))
+            {
+                var valid = Enum.GetNames(typeof(MetadataEnhanceOptions.EpisodeRefreshOption));
+                var mapped = (MetadataEnhanceOptions.MapRefreshRulesToScope(meta.MetadataRefreshPreferences) ?? string.Empty)
+                    .Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Select(x => x.Trim())
+                    .Where(x => valid.Contains(x, StringComparer.OrdinalIgnoreCase))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                if (mapped.Count > 0) meta.EpisodeRefreshScope = string.Join(",", mapped);
+                meta.MetadataRefreshPreferences = string.Empty;
+                changed = true;
+            }
+
+            if (Common.ProxyConfig.MigrateLegacy(options?.GeneralOptions)) changed = true;
+            return changed;
+        }
+
+        /// <summary>界面（弹窗、仪表盘）改了设置后保存：补齐下拉列表与中文名再落盘，与页面保存一致。</summary>
+        public void SaveOptionsFromUi()
+        {
+            var options = OnBeforeShowUI(GetOptions()) ?? GetOptions();
+            EnsureDynamicLists(options);
+            Common.OptionLabels.Repair(options);
+            SaveOptions(options);
+        }
+
+        private Func<IPluginUIView, MediaBrowser.Model.GenericEdit.IEditableObject, Task<IPluginUIView>> MakeSaveHandler<T>(Action<T> apply) where T : class
+        {
+            return (view, content) =>
+            {
+                try
+                {
+                    if (content is T incoming) apply(incoming);
+                    var options = OnBeforeShowUI(GetOptions()) ?? GetOptions();
+                    EnsureDynamicLists(options);
+
+                    // UI 回传的下拉/单选列表只有 Value，Name 会丢；这里按 Value 补回中文名，
+                    // 否则页面显示 undefined（生产已复现）。
+                    Common.OptionLabels.Repair(options);
+                    SaveOptions(options);
+                }
+                catch (Exception ex)
+                {
+                    // 以前这里只写 /tmp/save.log 然后吞掉异常：页面提示"已保存"，实际没存。
+                    // 现在记到 Emby 日志并抛回给 UI，让失败可见。
+                    Logger.ErrorException("PageSave failed for " + typeof(T).Name, ex);
+                    throw;
+                }
+                return Task.FromResult(view);
+            };
+        }
+
+        /// <summary>把 incoming 的非空属性合并到 live 对象（Emby 只回传被编辑的对象）。</summary>
+        private static void MergeInto(object live, object incoming)
+        {
+            if (live == null || incoming == null) return;
+            foreach (var p in live.GetType().GetProperties())
+            {
+                if (!p.CanRead || !p.CanWrite) continue;
+                // 页面上看不到的属性（下拉框选项来源、放进「配置」弹窗里的细项）不从页面回传值覆盖：
+                // 弹窗保存后页面里留着的是打开页面时的旧值，再点页面「保存」会把弹窗的修改冲掉。
+                if (Options.UI.OptionCopy.IsHidden(p)) continue;
+                var v = p.GetValue(incoming);
+                if (v == null) continue;
+
+                // Emby 回传的是数组，而属性是 List<T>：不转换会抛异常并中断保存
+                v = CoerceCollection(v, p.PropertyType);
+                if (v == null) continue;
+
+                p.SetValue(live, v);
+            }
+        }
+
+        private void BuildTabbedPages()
+        {
+            var pluginId = Id.ToString();
+            var tabs = new List<IPluginUIPageController>
+            {
+                new TabPageController(pluginId, "general", "\u5e38\u89c4\u8bbe\u7f6e", "settings",
+                    () => GetOptions().GeneralOptions,
+                    saveHandler: MakeSaveHandler<GeneralOptions>(o => MergeInto(GetOptions().GeneralOptions, o))),
+                new TabPageController(pluginId, "mediainfo", "\u5a92\u4f53\u4fe1\u606f\u63d0\u53d6", "photo_library",
+                    () => GetOptions().MediaInfoExtractOptions,
+                    saveHandler: MakeSaveHandler<MediaInfoExtractOptions>(o => MergeInto(GetOptions().MediaInfoExtractOptions, o))),
+                new TabPageController(pluginId, "metadata", "\u5143\u6570\u636e\u589e\u5f3a", "auto_awesome",
+                    () => GetOptions().MetadataEnhanceOptions,
+                    saveHandler: MakeSaveHandler<MetadataEnhanceOptions>(o => MergeInto(GetOptions().MetadataEnhanceOptions, o))),
+                new TabPageController(pluginId, "introskip", "\u7247\u5934\u7247\u5c3e\u589e\u5f3a", "content_cut",
+                    () => GetOptions().IntroSkipOptions,
+                    saveHandler: MakeSaveHandler<IntroSkipOptions>(o => MergeInto(GetOptions().IntroSkipOptions, o))),
+                new TabPageController(pluginId, "experience", "\u4f53\u9a8c\u589e\u5f3a", "rocket_launch",
+                    () => GetOptions().ExperienceEnhanceOptions,
+                    saveHandler: MakeSaveHandler<ExperienceEnhanceOptions>(o => MergeInto(GetOptions().ExperienceEnhanceOptions, o))),
+            };
+
+            // 主页 = 概览：运行状态、计划任务、维护、关于（每次打开现算，没有要保存的东西）
+            var overview =
+                new TabPageController(pluginId, "overview", "\u795e\u533b\u52a9\u624b", "dashboard",
+                    Options.OverviewOptions.Build,
+                    (view, itemId, commandId, data) =>
+                    {
+                        var command = commandId ?? data;
+                        if (command == "ClearMetadataCache")
+                        {
+                            var root = GetOptions().MetadataEnhanceOptions?.MetadataCacheRootFolder;
+                            var removed = 0;
+                            try
+                            {
+                                if (!string.IsNullOrWhiteSpace(root) && System.IO.Directory.Exists(root))
+                                {
+                                    foreach (var dir in System.IO.Directory.GetDirectories(root))
+                                    {
+                                        try { System.IO.Directory.Delete(dir, true); removed++; } catch { }
+                                    }
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                Logger.Info("Dashboard - clear metadata cache failed: " + ex.Message);
+                            }
+
+                            Logger.Info("Dashboard - metadata cache cleared folders: " + removed);
+                            Options.DashboardOptions.LastActionResult = "已清空本地元数据缓存（" + removed + " 个目录）";
+                        }
+                        else if (command == "ClearTmdbCache")
+                        {
+                            var removed = Common.TmdbCache.Clear();
+                            Logger.Info("Dashboard - TMDb cache cleared: " + removed);
+                            Options.DashboardOptions.LastActionResult = "已清空 TMDB 响应缓存（" + removed + " 条）";
+                        }
+                        else if (command == "RebuildSearchIndex")
+                        {
+                            Common.SearchIndex.Rebuild();
+                            Logger.Info("Dashboard - 重建拼音/模糊索引");
+                            Options.DashboardOptions.LastActionResult = "拼音索引正在后台重建，几秒后刷新可看到条目数";
+                        }
+                        else if (command == "SendTestNotification")
+                        {
+                            var url = GetOptions().ExperienceEnhanceOptions?.NotificationWebhookUrl;
+                            if (string.IsNullOrWhiteSpace(url))
+                            {
+                                Options.DashboardOptions.LastNotifyResult = "未填写 Webhook 地址（体验增强 → 通知）";
+                            }
+                            else
+                            {
+                                var code = Common.TaskReporter.PostWebhook(url, "测试通知",
+                                    "这是一条来自神医助手的测试消息（" + DateTime.Now.ToString("HH:mm:ss") + "）", Logger);
+                                Options.DashboardOptions.LastNotifyResult = code >= 200 && code < 300
+                                    ? "已发送（HTTP " + code + "）" + DateTime.Now.ToString(" HH:mm:ss")
+                                    : "发送失败（" + (code < 0 ? "连接错误，见日志" : "HTTP " + code) + "）";
+                            }
+                        }
+
+                        // 其余（刷新、执行任务后）：重新读取一遍状态
+                        view.ContentData = Options.OverviewOptions.Build();
+                        return Task.FromResult(view);
+                    },
+                    showSave: false);
+
+            var pageInfo = new PluginPageInfo
+            {
+                Name = "Settings",
+                DisplayName = "\u795e\u533b\u52a9\u624b",
+                MenuIcon = "video_settings",
+                EnableInMainMenu = true,
+                EnableInUserMenu = false
+            };
+
+            _tabbedPageController = new TabbedPageController(pluginId, pageInfo, tabs, () => GetOptions(),
+                MakeSaveHandler<PluginOptions>(o => MergeInto(GetOptions(), o)), defaultPage: overview);
+        }
+
+        /// <summary>
+        /// 热路径（Harmony 补丁里每次查询/取媒体源都会调）用的轻量取值：
+        /// 不做 GetPluginOptions 里那套反射修正和建目录。
+        /// </summary>
+        public PluginOptions CurrentOptions => GetOptions();
+
+        public PluginOptions GetPluginOptions()
+        {
+            var options = GetOptions();
+
+            // 列表项来自配置文件：老配置里存的是英文名或干脆没有 Name，
+            // 每次取用时按 Value 重新补齐中文名，页面才不会出现英文或 undefined。
+            Common.OptionLabels.Repair(options);
+
+            ApplyDefaultFolders(options);
+
+            // 给仪表盘提供缓存配置（避免在选项构造期反向取值导致递归）
+            Options.DashboardOptions.CacheSettingsProvider = () => System.Tuple.Create(
+                options.MetadataEnhanceOptions?.MetadataCacheMode == true,
+                options.MetadataEnhanceOptions?.MetadataCacheRootFolder ?? string.Empty);
+
+            return options;
+        }
+
+        /// <summary>媒体信息 JSON 的默认存放目录：Emby 数据目录下（Docker 里就是 /config/strm-metadata）。</summary>
+        public string DefaultMediaInfoJsonRootFolder =>
+            System.IO.Path.Combine(ApplicationPaths.ProgramDataPath, "strm-metadata");
+
+        /// <summary>本地元数据缓存的默认存放目录。</summary>
+        public string DefaultMetadataCacheRootFolder =>
+            System.IO.Path.Combine(ApplicationPaths.ProgramDataPath, "strm-metadata-cache");
+
+        /// <summary>
+        /// 目录类选项留空时自动填上预设目录并创建出来。
+        /// 新手不知道该填哪里；而 JSON 根目录留空意味着把 JSON 写到 strm 旁边（网盘挂载目录），通常不是想要的。
+        /// </summary>
+        private void ApplyDefaultFolders(PluginOptions options)
+        {
+            if (options == null || ApplicationPaths == null) return;
+
+            var mediaInfo = options.MediaInfoExtractOptions;
+            // 以前默认值写死 /config/strm-metadata：非 Docker 安装没有 /config，这里也当作「没设置」处理
+            if (mediaInfo != null && (string.IsNullOrWhiteSpace(mediaInfo.MediaInfoJsonRootFolder) ||
+                                      (mediaInfo.MediaInfoJsonRootFolder == "/config/strm-metadata" &&
+                                       !System.IO.Directory.Exists("/config"))))
+            {
+                mediaInfo.MediaInfoJsonRootFolder = DefaultMediaInfoJsonRootFolder;
+                TryCreateDirectory(mediaInfo.MediaInfoJsonRootFolder);
+            }
+
+            var meta = options.MetadataEnhanceOptions;
+            if (meta != null && string.IsNullOrWhiteSpace(meta.MetadataCacheRootFolder))
+            {
+                meta.MetadataCacheRootFolder = DefaultMetadataCacheRootFolder;
+                TryCreateDirectory(meta.MetadataCacheRootFolder);
+            }
+        }
+
+        private void TryCreateDirectory(string path)
+        {
+            try { System.IO.Directory.CreateDirectory(path); }
+            catch (Exception e) { Logger?.Info("创建预设目录失败 " + path + ": " + e.Message); }
+        }
+
+        public void SavePluginOptionsSuppress()
+        {
+            _currentSuppressOnOptionsSaved = true;
+            SaveOptions(GetOptions());
+        }
+
+        protected override bool OnOptionsSaving(PluginOptions options)
+        {
+            ApplyDefaultFolders(options);
+
+            if (string.IsNullOrEmpty(options.GeneralOptions.CatchupTaskScope))
+            {
+                options.GeneralOptions.CatchupTaskScope = CatchupTask.MediaInfo.ToString();
+            }
+            else if (!options.IntroSkipOptions.UnlockIntroSkip)
+            {
+                var taskScope = options.GeneralOptions.CatchupTaskScope;
+                var selectedTasks = taskScope.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Where(f => f != CatchupTask.Fingerprint.ToString())
+                    .ToList();
+                options.GeneralOptions.CatchupTaskScope = string.Join(",", selectedTasks);
+            }
+
+            options.MediaInfoExtractOptions.LibraryScope = string.Join(",",
+                options.MediaInfoExtractOptions.LibraryScope
+                    ?.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Where(v => options.MediaInfoExtractOptions.LibraryList.Any(option => option.Value == v)) ??
+                Enumerable.Empty<string>());
+
+            options.IntroSkipOptions.LibraryScope = string.Join(",",
+                options.IntroSkipOptions.LibraryScope
+                    ?.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Where(v => options.IntroSkipOptions.LibraryList.Any(option => option.Value == v)) ??
+                Enumerable.Empty<string>());
+
+            options.IntroSkipOptions.UserScope = string.Join(",",
+                options.IntroSkipOptions.UserScope
+                    ?.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Where(v => options.IntroSkipOptions.UserList.Any(option => option.Value == v)) ??
+                Enumerable.Empty<string>());
+
+            options.IntroSkipOptions.MarkerEnabledLibraryScope =
+                options.IntroSkipOptions.MarkerEnabledLibraryScope
+                    ?.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Contains("-1") == true
+                    ? "-1"
+                    : string.Join(",",
+                        options.IntroSkipOptions.MarkerEnabledLibraryScope
+                            ?.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
+                            .Where(v => options.IntroSkipOptions.MarkerEnabledLibraryList.Any(option =>
+                                option.Value == v)) ?? Enumerable.Empty<string>());
+
+            return base.OnOptionsSaving(options);
+        }
+
+        private bool _optionsSavedReady;
+
+        protected override void OnOptionsSaved(PluginOptions options)
+        {
+            // 构造函数里 SavePluginOptionsSuppress() 也会走到这里，此时字段还没就绪，
+            // 直接跳过，避免插件加载阶段抛 NullReferenceException
+            if (!_optionsSavedReady) return;
+
+            try { Common.GlobalProxyService.Apply(); }
+            catch (System.Exception e) { Logger?.Info("GlobalProxy - 应用失败: " + e.Message); }
+
+            // 注意：这里不要在每次保存时去拿 FfmpegConfiguration。
+            // x86_64 上该属性会触发 FFmpeg 初始化并可能持有内部锁，
+            // 连续保存会让后续带鉴权的请求全部卡住（实测）。改为只在启动时应用。
+
+            var suppress = _currentSuppressOnOptionsSaved;
+
+            if (_currentCatchupMode != options.GeneralOptions.CatchupMode)
+            {
+                _currentCatchupMode = options.GeneralOptions.CatchupMode;
+                if (options.GeneralOptions.CatchupMode)
+                {
+                    QueueManager.Initialize();
+                }
+                else
+                {
+                    QueueManager.Dispose();
+                }
+            }
+            UpdateCatchupScope();
+
+            if (!suppress)
+            {
+                Logger.Info("CatchupMode is set to {0}", options.GeneralOptions.CatchupMode);
+                var catchupTaskScope = GetSelectedCatchupTaskDescription();
+                Logger.Info("CatchupTaskScope is set to {0}", string.IsNullOrEmpty(catchupTaskScope) ? "EMPTY" : catchupTaskScope);
+            }
+
+            if (!suppress)
+            {
+                Logger.Info("IncludeExtra is set to {0}", options.MediaInfoExtractOptions.IncludeExtra);
+                Logger.Info("MaxConcurrentCount is set to {0}", options.GeneralOptions.MaxConcurrentCount);
+                Logger.Info("CooldownDurationSeconds is set to {0}", options.GeneralOptions.CooldownDurationSeconds);
+                Logger.Info("Tier2 MaxConcurrentCount is set to {0}", options.GeneralOptions.Tier2MaxConcurrentCount);
+
+                var libraryScope = string.Join(", ",
+                    options.MediaInfoExtractOptions.LibraryScope
+                        ?.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
+                        .Select(v =>
+                            options.MediaInfoExtractOptions.LibraryList.FirstOrDefault(option => option.Value == v)
+                                ?.Name) ?? Enumerable.Empty<string>());
+                Logger.Info("MediaInfoExtract - LibraryScope is set to {0}",
+                    string.IsNullOrEmpty(libraryScope) ? "ALL" : libraryScope);
+            }
+            if (_currentMaxConcurrentCount != options.GeneralOptions.MaxConcurrentCount)
+            {
+                _currentMaxConcurrentCount = options.GeneralOptions.MaxConcurrentCount;
+
+                QueueManager.UpdateMasterSemaphore(_currentMaxConcurrentCount);
+
+                FingerprintApi.PatchTimeout(_currentMaxConcurrentCount);
+            }
+            if (_currentTier2ConcurrentCount != options.GeneralOptions.Tier2MaxConcurrentCount)
+            {
+                _currentTier2ConcurrentCount = options.GeneralOptions.Tier2MaxConcurrentCount;
+
+                QueueManager.UpdateTier2Semaphore(_currentTier2ConcurrentCount);
+            }
+            LibraryApi.UpdateLibraryPathsInScope();
+
+            if (!suppress)
+            {
+                Logger.Info("PersistMediaInfoMode is set to {0}", options.MediaInfoExtractOptions.PersistMediaInfoMode);
+                Logger.Info("MediaInfoJsonRootFolder is set to {0}",
+                    !string.IsNullOrEmpty(options.MediaInfoExtractOptions.MediaInfoJsonRootFolder)
+                        ? options.MediaInfoExtractOptions.MediaInfoJsonRootFolder
+                        : "EMPTY");
+            }
+
+            _currentPersistMediaInfo = options.MediaInfoExtractOptions.PersistMediaInfoMode !=
+                                       PersistMediaInfoOption.None.ToString();
+            _currentMediaInfoRestoreMode = options.MediaInfoExtractOptions.PersistMediaInfoMode ==
+                                           PersistMediaInfoOption.Restore.ToString();
+
+            if (!suppress)
+            {
+                Logger.Info("EnableIntroSkip is set to {0}", options.IntroSkipOptions.EnableIntroSkip);
+                Logger.Info("MaxIntroDurationSeconds is set to {0}", options.IntroSkipOptions.MaxIntroDurationSeconds);
+                Logger.Info("MaxCreditsDurationSeconds is set to {0}", options.IntroSkipOptions.MaxCreditsDurationSeconds);
+                Logger.Info("MinOpeningPlotDurationSeconds is set to {0}", options.IntroSkipOptions.MinOpeningPlotDurationSeconds);
+            }
+            if (_currentEnableIntroSkip != options.IntroSkipOptions.EnableIntroSkip)
+            {
+                _currentEnableIntroSkip = options.IntroSkipOptions.EnableIntroSkip;
+                if (options.IntroSkipOptions.EnableIntroSkip)
+                {
+                    PlaySessionMonitor.Initialize();
+                }
+                else
+                {
+                    PlaySessionMonitor.Dispose();
+                }
+            }
+
+            UpdateIntroSkipPreferences();
+
+            if (!suppress)
+            {
+                var intoSkipLibraryScope = string.Join(", ",
+                    options.IntroSkipOptions.LibraryScope?.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
+                        .Select(v => options.IntroSkipOptions.LibraryList
+                            .FirstOrDefault(option => option.Value == v)
+                            ?.Name) ?? Enumerable.Empty<string>());
+                Logger.Info("IntroSkip - LibraryScope is set to {0}",
+                        string.IsNullOrEmpty(intoSkipLibraryScope) ? "ALL" : intoSkipLibraryScope);
+
+                var introSkipUserScope = string.Join(", ",
+                    options.IntroSkipOptions.UserScope?.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
+                        .Select(v => options.IntroSkipOptions.UserList
+                            .FirstOrDefault(option => option.Value == v)
+                            ?.Name) ?? Enumerable.Empty<string>());
+                Logger.Info("IntroSkip - UserScope is set to {0}",
+                        string.IsNullOrEmpty(introSkipUserScope) ? "ALL" : introSkipUserScope);
+
+                Logger.Info("IntroSkip - ClientScope is set to {0}", options.IntroSkipOptions.ClientScope);
+                var introSkipPreferences = GetSelectedIntroSkipPreferenceDescription();
+
+                Logger.Info("IntroSkipPreferences is set to {0}",
+                    string.IsNullOrEmpty(introSkipPreferences) ? "EMPTY" : introSkipPreferences);
+            }
+            PlaySessionMonitor.UpdateLibraryPathsInScope();
+            PlaySessionMonitor.UpdateUsersInScope();
+            PlaySessionMonitor.UpdateClientInScope();
+            
+            if (!suppress)
+            {
+                Logger.Info("UnlockIntroSkip is set to {0}", options.IntroSkipOptions.UnlockIntroSkip);
+                var markerEnabledLibraryScope = string.Join(", ",
+                    options.IntroSkipOptions.MarkerEnabledLibraryScope
+                        ?.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries).Select(v =>
+                            options.IntroSkipOptions.MarkerEnabledLibraryList
+                                .FirstOrDefault(option => option.Value == v)?.Name) ?? Enumerable.Empty<string>());
+                Logger.Info("MarkerEnabledLibraryScope is set to {0}",
+                    string.IsNullOrEmpty(markerEnabledLibraryScope)
+                        ? options.IntroSkipOptions.MarkerEnabledLibraryList.Any(o => o.Value != "-1") ? "ALL" : "EMPTY"
+                        : markerEnabledLibraryScope);
+                Logger.Info("IntroDetectionFingerprintMinutes is set to {0}",
+                    options.IntroSkipOptions.IntroDetectionFingerprintMinutes);
+            }
+            _currentUnlockIntroSkip = options.IntroSkipOptions.UnlockIntroSkip;
+            FingerprintApi.UpdateLibraryPathsInScope();
+            FingerprintApi.UpdateLibraryIntroDetectionFingerprintLength();
+
+            if (!suppress)
+            {
+                Logger.Info("MergeMultiVersion is set to {0}", options.ExperienceEnhanceOptions.MergeMultiVersion);
+                Logger.Info("MergeMoviesPreference is set to {0}",
+                    EnumExtensions.GetDescription(options.ExperienceEnhanceOptions.MergeMoviesPreference));
+            }
+            _currentMergeMultiVersion = options.ExperienceEnhanceOptions.MergeMultiVersion;
+
+            if (suppress) _currentSuppressOnOptionsSaved = false;
+
+            // 定时触发器跟着开关走：保存设置后立即同步，不用重启
+            if (!suppress) EntryPoints.TaskTriggerSyncEntryPoint.SyncNow(Logger);
+
+            base.OnOptionsSaved(options);
+        }
+
+        protected override PluginOptions OnBeforeShowUI(PluginOptions options)
+        {
+            options.Disclaimer.Clear();
+            options.Disclaimer.Add(
+                new GenericListItem
+                {
+                    PrimaryText = Resources.DisclaimerButtonText,
+                    Icon = IconNames.privacy_tip,
+                    IconMode = ItemListIconMode.SmallRegular,
+                    HyperLink = "https://github.com/sjtuross/StrmAssistant#%E5%A3%B0%E6%98%8E"
+                });
+
+            if (options.ShowConflictPluginLoadedStatus)
+            {
+                options.ConflictPluginLoadedStatus.Caption = Resources
+                    .PluginOptions_IncompatibleMessage_Please_uninstall_the_conflict_plugin_Strm_Extract;
+                options.ConflictPluginLoadedStatus.StatusText = string.Empty;
+                options.ConflictPluginLoadedStatus.Status = ItemStatus.Warning;
+            }
+            else
+            {
+                options.ConflictPluginLoadedStatus.Caption = string.Empty;
+                options.ConflictPluginLoadedStatus.StatusText = string.Empty;
+                options.ConflictPluginLoadedStatus.Status = ItemStatus.None;
+            }
+
+            var libraries = _libraryManager.GetVirtualFolders();
+
+            var list = new List<EditorSelectOption>();
+            var listShow = new List<EditorSelectOption>();
+            var listMarkerEnabled = new List<EditorSelectOption>();
+
+            list.Add(new EditorSelectOption
+            {
+                Value = "-1",
+                Name = Resources.Favorites,
+                IsEnabled = true
+            });
+
+            listMarkerEnabled.Add(new EditorSelectOption
+            {
+                Value = "-1",
+                Name = Resources.Favorites,
+                IsEnabled = true
+            });
+
+            foreach (var item in libraries)
+            {
+                if (ExcludedCollectionTypes.Contains(item.CollectionType))
+                {
+                    continue;
+                }
+
+                var selectOption = new EditorSelectOption
+                {
+                    Value = item.ItemId,
+                    Name = item.Name,
+                    IsEnabled = true,
+                };
+
+                list.Add(selectOption);
+
+                if (item.CollectionType == "tvshows" || item.CollectionType is null)
+                {
+                    listShow.Add(selectOption);
+
+                    if (item.LibraryOptions.EnableMarkerDetection)
+                    {
+                        listMarkerEnabled.Add(selectOption);
+                    }
+                }
+            }
+
+            options.MediaInfoExtractOptions.LibraryList = list;
+            options.IntroSkipOptions.LibraryList = listShow;
+            options.IntroSkipOptions.MarkerEnabledLibraryList = listMarkerEnabled;
+            options.MetadataEnhanceOptions.EpisodeRefreshLibraryList = listShow;
+
+            var catchTaskList = new List<EditorSelectOption>();
+            foreach (Enum item in Enum.GetValues(typeof(CatchupTask)))
+            {
+                var selectOption = new EditorSelectOption
+                {
+                    Value = item.ToString(),
+                    Name = Common.OptionLabels.Label(item.ToString()),
+                    IsEnabled = true,
+                };
+
+                catchTaskList.Add(selectOption);
+            }
+
+            options.GeneralOptions.CatchupTaskList = catchTaskList;
+
+            var persistOptionList = new List<EditorRadioOption>
+            {
+                new EditorRadioOption
+                {
+                    Value = PersistMediaInfoOption.Default,
+                    IsEnabled = true,
+                    PrimaryText = Resources.MediaInfoExtractOptions_PersistMediaInfo_Persist_MediaInfo,
+                    SecondaryText =
+                        Resources
+                            .MediaInfoExtractOptions_PersistMediaInfo_Persist_media_info_in_JSON_file__Default_is_OFF_
+                },
+                new EditorRadioOption
+                {
+                    Value = PersistMediaInfoOption.Restore,
+                    IsEnabled = true,
+                    PrimaryText = Resources.MediaInfoExtractOptions_MediaInfoRestoreMode_MediaInfo_Restore_Mode,
+                    SecondaryText =
+                        Resources
+                            .MediaInfoExtractOptions_MediaInfoRestoreMode_Only_restore_media_info__chapters__and_video_thumbnails_from_JSON_or_BIF__skipping_extraction__Default_is_OFF_
+                },
+                new EditorRadioOption
+                {
+                    Value = PersistMediaInfoOption.None,
+                    PrimaryText = Resources.PersistMediaInfoOption_None_None,
+                    IsEnabled = true
+                }
+            };
+
+            options.MediaInfoExtractOptions.PersistMediaInfoOptionList = persistOptionList;
+
+
+            var episodeRefreshOptionList = new List<EditorSelectOption>();
+            foreach (Enum item in Enum.GetValues(typeof(EpisodeRefreshOption)))
+            {
+                var selectOption = new EditorSelectOption
+                {
+                    Value = item.ToString(),
+                    Name = Common.OptionLabels.Label(item.ToString()),
+                    IsEnabled = true,
+                };
+
+                episodeRefreshOptionList.Add(selectOption);
+            }
+
+            options.MetadataEnhanceOptions.EpisodeRefreshOptionList = episodeRefreshOptionList;
+
+            var introSkipPreferenceList = new List<EditorSelectOption>();
+            foreach (Enum item in Enum.GetValues(typeof(IntroSkipPreference)))
+            {
+                var selectPreference = new EditorSelectOption
+                {
+                    Value = item.ToString(),
+                    Name = Common.OptionLabels.Label(item.ToString()),
+                    IsEnabled = true,
+                };
+
+                introSkipPreferenceList.Add(selectPreference);
+            }
+
+            options.IntroSkipOptions.IntroSkipPreferenceList = introSkipPreferenceList;
+
+            options.AboutOptions.VersionInfoList.Clear();
+            options.AboutOptions.VersionInfoList.Add(
+                new GenericListItem
+                {
+                    PrimaryText = GetVersionHash(),
+                    Icon = IconNames.info,
+                    IconMode = ItemListIconMode.SmallRegular
+                });
+
+            options.AboutOptions.VersionInfoList.Add(
+                new GenericListItem
+                {
+                    PrimaryText = Resources.Repo_Link,
+                    Icon = IconNames.code,
+                    IconMode = ItemListIconMode.SmallRegular,
+                    HyperLink = "https://github.com/sjtuross/StrmAssistant",
+                });
+
+            options.AboutOptions.VersionInfoList.Add(
+                new GenericListItem
+                {
+                    PrimaryText = Resources.Wiki_Link,
+                    Icon = IconNames.menu_book,
+                    IconMode = ItemListIconMode.SmallRegular,
+                    HyperLink = "https://github.com/sjtuross/StrmAssistant/wiki",
+                });
+
+            var allUsers = LibraryApi.AllUsers;
+            var userList = new List<EditorSelectOption>();
+            foreach (var user in allUsers)
+            {
+                var selectOption = new EditorSelectOption
+                {
+                    Value = user.Key.InternalId.ToString(),
+                    Name = (user.Value ? "\ud83d\udc51" : "\ud83d\udc64") + user.Key.Name,
+                    IsEnabled = true,
+                };
+
+                userList.Add(selectOption);
+            }
+
+            options.IntroSkipOptions.UserList = userList;
+
+            return base.OnBeforeShowUI(options);
+        }
+
+        protected override void OnCreatePageInfo(PluginPageInfo pageInfo)
+        {
+            pageInfo.Name = Name;
+            pageInfo.DisplayName =
+                Resources.ResourceManager.GetString("PluginOptions_EditorTitle_Strm_Assistant", DefaultUICulture);
+            pageInfo.EnableInMainMenu = true;
+            pageInfo.MenuIcon = "video_settings";
+
+            base.OnCreatePageInfo(pageInfo);
+        }
+
+        internal static string GetVersionHash()
+        {
+            var assembly = Assembly.GetExecutingAssembly();
+            var informationalVersion = assembly
+                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+
+            var fullVersion = assembly.GetName().Version?.ToString();
+
+            if (informationalVersion != null)
+            {
+                var parts = informationalVersion.Split('+');
+                var shortCommitHash = parts.Length > 1 ? parts[1].Substring(0, 7) : "n/a";
+                return $"{fullVersion}+{shortCommitHash}";
+            }
+
+            return fullVersion;
+        }
+    }
+}

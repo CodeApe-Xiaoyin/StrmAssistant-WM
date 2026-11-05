@@ -1,0 +1,134 @@
+using MediaBrowser.Model.Logging;
+using MediaBrowser.Model.Tasks;
+using StrmAssistant.Common;
+using StrmAssistant.Properties;
+using System;
+using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace StrmAssistant.ScheduledTask
+{
+    public class RefreshEpisodeTask : IScheduledTask, IConfigurableScheduledTask
+    {
+        private readonly ILogger _logger = Plugin.Instance.Logger;
+
+        private static readonly Random Random = new Random();
+
+        public async Task Execute(CancellationToken cancellationToken, IProgress<double> progress)
+        {
+            _logger.Info("RefreshPerson - Scheduled Task Execute");
+            // 整个任务用同一个信号量实例：中途改了并发数也是「在哪个上等、就在哪个上放」
+            var tier2Gate = QueueManager.Tier2Semaphore;
+            var tier2MaxConcurrentCount = Plugin.Instance.GetPluginOptions().GeneralOptions.Tier2MaxConcurrentCount;
+            _logger.Info("Tier2 Max Concurrent Count: " + tier2MaxConcurrentCount);
+
+            await Task.Yield();
+            progress.Report(0);
+
+            var itemsToRefresh = Plugin.LibraryApi.FetchEpisodeRefreshTaskItems();
+
+            IsRunning = true;
+
+            double total = itemsToRefresh.Count;
+            var index = 0;
+            var current = 0;
+
+            var tasks = new List<Task>();
+
+            foreach (var item in itemsToRefresh)
+            {
+                try
+                {
+                    await tier2Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch
+                {
+                    return;
+                }
+                
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    tier2Gate.Release();
+                    _logger.Info("EpisodeRefresh - Scheduled Task Cancelled");
+                    return;
+                }
+
+                var taskIndex = ++index;
+                var taskItem = item;
+                var task = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await Task.Delay(
+                                Random.Next(0,
+                                    Math.Max(0, tier2MaxConcurrentCount - tier2Gate.CurrentCount) *
+                                    MetadataApi.RequestIntervalMs), cancellationToken)
+                            .ConfigureAwait(false);
+
+                        if (cancellationToken.IsCancellationRequested)
+                        {
+                            _logger.Info("EpisodeRefresh - Scheduled Task Cancelled");
+                            return;
+                        }
+
+                        await Plugin.LibraryApi.RefreshEpisodeMetadata(taskItem, cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        _logger.Info("EpisodeRefresh - Item cancelled: " + taskItem.Name + " - " + taskItem.Path);
+                    }
+                    catch (Exception e)
+                    {
+                        _logger.Info("EpisodeRefresh - Item failed: " + taskItem.Name + " - " + taskItem.Path);
+                        _logger.Debug(e.Message);
+                        _logger.Debug(e.StackTrace);
+                    }
+                    finally
+                    {
+                        tier2Gate.Release();
+
+                        var currentCount = Interlocked.Increment(ref current);
+                        progress.Report(currentCount / total * 100);
+                        _logger.Info("EpisodeRefresh - Progress " + currentCount + "/" + total + " - " +
+                                     "Task " + taskIndex + ": " + taskItem.Path);
+                    }
+                }, cancellationToken);
+                tasks.Add(task);
+                Task.Delay(10).Wait();
+            }
+            await Task.WhenAll(tasks).ConfigureAwait(false);
+
+            IsRunning = false;
+
+            progress.Report(100.0);
+            _logger.Info("EpisodeRefresh - Scheduled Task Complete");
+            Common.TaskReporter.Report("刷新剧集元数据", "剧集元数据刷新完成", _logger);
+        }
+
+        public string Category => Resources.ResourceManager.GetString("PluginOptions_EditorTitle_Strm_Assistant",
+            Plugin.Instance.DefaultUICulture);
+
+        public string Key => "EpisodeRefreshTask";
+
+        public string Description => Resources.ResourceManager.GetString(
+            "EpisodeRefreshTask_Description_Refresh_metadata_for_episodes_missing_overview",
+            Plugin.Instance.DefaultUICulture);
+
+        public string Name => "\u5237\u65b0\u5267\u96c6\u5143\u6570\u636e";
+
+        public IEnumerable<TaskTriggerInfo> GetDefaultTriggers()
+        {
+            return Array.Empty<TaskTriggerInfo>();
+        }
+
+        public bool IsHidden => false;
+
+        public bool IsEnabled => true;
+
+        public bool IsLogged => true;
+
+        public static bool IsRunning { get; private set; }
+    }
+}

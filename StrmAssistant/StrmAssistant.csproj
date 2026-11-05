@@ -1,0 +1,96 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- EmbyTarget 默认值在 Directory.Build.props；4.8 运行在 .NET 6 上 -->
+    <TargetFramework Condition="'$(EmbyTarget)' == '4.8'">net6.0</TargetFramework>
+    <TargetFramework Condition="'$(EmbyTarget)' != '4.8'">net8.0</TargetFramework>
+    <AssemblyVersion>2.2.0.0</AssemblyVersion>
+    <FileVersion>2.2.0.0</FileVersion>
+    <CopyLocalLockFileAssemblies>True</CopyLocalLockFileAssemblies>
+    <IncludeSourceRevisionInInformationalVersion>true</IncludeSourceRevisionInInformationalVersion>
+    <AssemblyName>$(MSBuildProjectName)Lite</AssemblyName>
+    <RunPluginPostBuild Condition="'$(RunPluginPostBuild)' == '' and '$(OS)' == 'Windows_NT'">true</RunPluginPostBuild>
+    <RunPluginPostBuild Condition="'$(RunPluginPostBuild)' == ''">false</RunPluginPostBuild>
+  </PropertyGroup>
+  <!-- 每个 Emby 版本对应的服务端包、libs 目录和条件编译符号 -->
+  <PropertyGroup Condition="'$(EmbyTarget)' == '4.10'">
+    <EmbyPackageVersion>4.10.0.24-beta</EmbyPackageVersion>
+    <EmbyLibDir>..\libs\</EmbyLibDir>
+    <DefineConstants>$(DefineConstants);EMBY410</DefineConstants>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(EmbyTarget)' == '4.9'">
+    <EmbyPackageVersion>4.9.1.80</EmbyPackageVersion>
+    <EmbyLibDir>..\libs\emby4.9\</EmbyLibDir>
+    <DefineConstants>$(DefineConstants);EMBY49;EMBY_LEGACY</DefineConstants>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(EmbyTarget)' == '4.8'">
+    <EmbyPackageVersion>4.8.11</EmbyPackageVersion>
+    <EmbyLibDir>..\libs\emby4.8\</EmbyLibDir>
+    <DefineConstants>$(DefineConstants);EMBY48;EMBY_LEGACY</DefineConstants>
+  </PropertyGroup>
+  <Target Name="CheckEmbyTarget" BeforeTargets="Restore;_CheckForInvalidConfigurationAndPlatform">
+    <Error Condition="'$(EmbyPackageVersion)' == ''" Text="不支持的 EmbyTarget='$(EmbyTarget)'，可选：4.10 / 4.9 / 4.8" />
+  </Target>
+  <ItemGroup>
+    <None Remove="Web\Resources\shortcuts.js" />
+    <None Remove="Web\Resources\strmassistant.js" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Properties\thumb.png" />
+    <EmbeddedResource Include="Web\Resources\shortcuts.js" />
+    <EmbeddedResource Include="Web\Resources\strmassistant.js" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="Emby.Web.GenericEdit">
+      <HintPath>$(EmbyLibDir)Emby.Web.GenericEdit.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Emby.Web.GenericUI">
+      <HintPath>$(EmbyLibDir)Emby.Web.GenericUI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="MovieDb">
+      <HintPath>$(EmbyLibDir)MovieDb.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="CHTCHSConv" Version="1.0.0">
+    </PackageReference>
+    <PackageReference Include="ILRepack" Version="2.0.42">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="mediabrowser.server.core" Version="$(EmbyPackageVersion)" />
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Resource.Embedder" Version="2.2.0" Condition="'$(OS)' == 'Windows_NT'" />
+    <PackageReference Include="TinyPinyin.Net" Version="1.0.2" />
+    <PackageReference Include="Lib.Harmony" Version="2.3.3" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Update="Properties\Resources.Designer.cs">
+      <DesignTime>True</DesignTime>
+      <AutoGen>True</AutoGen>
+      <DependentUpon>Resources.resx</DependentUpon>
+    </Compile>
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Update="Properties\Resources.resx">
+      <Generator>PublicResXFileCodeGenerator</Generator>
+      <LastGenOutput>Resources.Designer.cs</LastGenOutput>
+    </EmbeddedResource>
+    <EmbeddedResource Update="Properties\Resources.zh-hant.resx">
+      <DependentUpon>Resources.resx</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Update="Properties\Resources.zh.resx">
+      <DependentUpon>Resources.resx</DependentUpon>
+    </EmbeddedResource>
+  </ItemGroup>
+  <Target Name="PostBuild" AfterTargets="PostBuildEvent" Condition="'$(RunPluginPostBuild)' == 'true' and '$(OS)' == 'Windows_NT'">
+    <Exec Command="$(ILRepack) /out:%25AppData%25\Emby-Server\programdata\plugins\$(TargetFileName) $(TargetPath) $(TargetDir)ChineseConverter.dll /lib:$(TargetDir)" />
+  </Target>
+</Project>
