@@ -72,7 +72,7 @@ namespace StrmAssistant.Common
 
             foreach (var episode in resultEpisodes)
             {
-                var chapters = _itemRepository.GetChapters(episode);
+                var chapters = _itemRepository.GetChapters(episode, System.Threading.CancellationToken.None);
 
                 chapters.RemoveAll(c => c.MarkerType == MarkerType.IntroStart || c.MarkerType == MarkerType.IntroEnd);
 
@@ -116,7 +116,7 @@ namespace StrmAssistant.Common
                 {
                     if (episode.RunTimeTicks.Value - creditsDurationTicks > 0)
                     {
-                        var chapters = _itemRepository.GetChapters(episode);
+                        var chapters = _itemRepository.GetChapters(episode, System.Threading.CancellationToken.None);
                         chapters.RemoveAll(c => c.MarkerType == MarkerType.CreditsStart);
 
                         var creditsStart = new ChapterInfo
@@ -448,7 +448,7 @@ namespace StrmAssistant.Common
 
                 foreach (var episode in parent.Reverse())
                 {
-                    var chapters = _itemRepository.GetChapters(episode);
+                    var chapters = _itemRepository.GetChapters(episode, System.Threading.CancellationToken.None);
 
                     var hasIntroMarkers =
                         chapters.Any(c => c.MarkerType == MarkerType.IntroStart && IsMarkerAddedByIntroSkip(c)) &&
@@ -483,7 +483,7 @@ namespace StrmAssistant.Common
                     {
                         foreach (var episode in episodes.Where(e => e.ParentId == parent.Key && e.IndexNumber.HasValue))
                         {
-                            var chapters = _itemRepository.GetChapters(episode);
+                            var chapters = _itemRepository.GetChapters(episode, System.Threading.CancellationToken.None);
                             chapters.Add(introStart);
                             chapters.Add(introEnd);
                             chapters.Sort((c1, c2) => c1.StartPositionTicks.CompareTo(c2.StartPositionTicks));
@@ -512,7 +512,7 @@ namespace StrmAssistant.Common
                                     var creditsStartTicks = episode.RunTimeTicks.Value - creditsDurationTicks;
                                     if (creditsStartTicks > 0)
                                     {
-                                        var chapters = _itemRepository.GetChapters(episode);
+                                        var chapters = _itemRepository.GetChapters(episode, System.Threading.CancellationToken.None);
                                         var creditsStart = new ChapterInfo
                                         {
                                             Name = MarkerType.CreditsStart + MarkerSuffix,

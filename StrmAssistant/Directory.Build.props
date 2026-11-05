@@ -1,17 +1,17 @@
 <Project>
   <!--
-    按 Emby 版本分别构建：
-      dotnet build StrmAssistant/StrmAssistant.csproj -c Release                       （默认 4.10）
-      dotnet build StrmAssistant/StrmAssistant.csproj -c Release -p:EmbyTarget=4.9
-      dotnet build StrmAssistant/StrmAssistant.csproj -c Release -p:EmbyTarget=4.8
-    4.10 的输出路径保持不变（bin/Release/net8.0），其它版本放到 bin/emby<版本>/、obj/emby<版本>/，
-    避免 restore 产物（project.assets.json）互相覆盖。
+    默认构建通用包（EmbyTarget=all）：按 Emby 4.8 接口、.NET 6 编译，4.8 / 4.9 / 4.10 都能加载，
+    版本差异在 Common/EmbyCompat.cs 里运行时处理。输出 bin/Release/net6.0。
+      dotnet build StrmAssistant/StrmAssistant.csproj -c Release
+    也可以按单个版本构建（排查兼容问题时对照用），输出到 bin/emby<版本>/、obj/emby<版本>/：
+      dotnet build StrmAssistant/StrmAssistant.csproj -c Release -p:EmbyTarget=4.10   （4.9 / 4.8 同理）
+    各目标的 bin/obj 分开，避免 restore 产物（project.assets.json）互相覆盖。
     这些路径必须在 SDK 导入之前确定，所以放在 Directory.Build.props 里。
   -->
   <PropertyGroup>
-    <EmbyTarget Condition="'$(EmbyTarget)' == ''">4.10</EmbyTarget>
-    <BaseIntermediateOutputPath Condition="'$(EmbyTarget)' != '4.10'">obj\emby$(EmbyTarget)\</BaseIntermediateOutputPath>
-    <BaseOutputPath Condition="'$(EmbyTarget)' != '4.10'">bin\emby$(EmbyTarget)\</BaseOutputPath>
+    <EmbyTarget Condition="'$(EmbyTarget)' == ''">all</EmbyTarget>
+    <BaseIntermediateOutputPath Condition="'$(EmbyTarget)' != 'all'">obj\emby$(EmbyTarget)\</BaseIntermediateOutputPath>
+    <BaseOutputPath Condition="'$(EmbyTarget)' != 'all'">bin\emby$(EmbyTarget)\</BaseOutputPath>
     <!-- 各版本的 bin/obj 互相嵌套，统一排除，防止生成的 AssemblyInfo 等被重复编译 -->
     <DefaultItemExcludes>$(DefaultItemExcludes);bin\**;obj\**</DefaultItemExcludes>
   </PropertyGroup>

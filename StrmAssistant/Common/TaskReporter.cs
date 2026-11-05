@@ -85,15 +85,14 @@ namespace StrmAssistant.Common
                         }
                         else
                         {
-                            manager.SendNotification(new Emby.Notifications.NotificationRequest
+                            var request = new Emby.Notifications.NotificationRequest
                             {
                                 Title = "Strm Assistant · " + taskName,
                                 Description = summary,
-                                Date = System.DateTimeOffset.Now,
-#if !EMBY48
-                                Severity = LogSeverity.Info
-#endif
-                            });
+                                Date = System.DateTimeOffset.Now
+                            };
+                            EmbyCompat.SetIfExists(request, "Severity", "Info"); // 4.8 没有这个属性
+                            manager.SendNotification(request);
                             logger?.Info("TaskReporter - notification dispatched: " + taskName);
                             PostWebhook(taskName, summary, logger);
                         }

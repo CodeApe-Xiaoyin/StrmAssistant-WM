@@ -1,10 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <!-- EmbyTarget 默认值在 Directory.Build.props；4.8 运行在 .NET 6 上 -->
-    <TargetFramework Condition="'$(EmbyTarget)' == '4.8'">net6.0</TargetFramework>
-    <TargetFramework Condition="'$(EmbyTarget)' != '4.8'">net8.0</TargetFramework>
-    <AssemblyVersion>2.2.1.0</AssemblyVersion>
-    <FileVersion>2.2.1.0</FileVersion>
+    <!-- EmbyTarget 默认 all（通用包），见 Directory.Build.props；4.8 运行在 .NET 6 上，通用包也按 .NET 6 编译 -->
+    <TargetFramework Condition="'$(EmbyTarget)' == '4.8' or '$(EmbyTarget)' == 'all'">net6.0</TargetFramework>
+    <TargetFramework Condition="'$(EmbyTarget)' != '4.8' and '$(EmbyTarget)' != 'all'">net8.0</TargetFramework>
+    <AssemblyVersion>2.3.0.0</AssemblyVersion>
+    <FileVersion>2.3.0.0</FileVersion>
     <CopyLocalLockFileAssemblies>True</CopyLocalLockFileAssemblies>
     <IncludeSourceRevisionInInformationalVersion>true</IncludeSourceRevisionInInformationalVersion>
     <AssemblyName>$(MSBuildProjectName)Lite</AssemblyName>
@@ -12,6 +12,12 @@
     <RunPluginPostBuild Condition="'$(RunPluginPostBuild)' == ''">false</RunPluginPostBuild>
   </PropertyGroup>
   <!-- 每个 Emby 版本对应的服务端包、libs 目录和条件编译符号 -->
+  <!-- 通用包：引用 4.8 接口（最老的），新版 Emby 都能加载 -->
+  <PropertyGroup Condition="'$(EmbyTarget)' == 'all'">
+    <EmbyPackageVersion>4.8.11</EmbyPackageVersion>
+    <EmbyLibDir>..\libs\emby4.8\</EmbyLibDir>
+    <DefineConstants>$(DefineConstants);EMBY_UNIVERSAL</DefineConstants>
+  </PropertyGroup>
   <PropertyGroup Condition="'$(EmbyTarget)' == '4.10'">
     <EmbyPackageVersion>4.10.0.24-beta</EmbyPackageVersion>
     <EmbyLibDir>..\libs\</EmbyLibDir>
@@ -28,7 +34,7 @@
     <DefineConstants>$(DefineConstants);EMBY48;EMBY_LEGACY</DefineConstants>
   </PropertyGroup>
   <Target Name="CheckEmbyTarget" BeforeTargets="Restore;_CheckForInvalidConfigurationAndPlatform">
-    <Error Condition="'$(EmbyPackageVersion)' == ''" Text="不支持的 EmbyTarget='$(EmbyTarget)'，可选：4.10 / 4.9 / 4.8" />
+    <Error Condition="'$(EmbyPackageVersion)' == ''" Text="不支持的 EmbyTarget='$(EmbyTarget)'，可选：all（默认，通用包）/ 4.10 / 4.9 / 4.8" />
   </Target>
   <ItemGroup>
     <None Remove="Web\Resources\shortcuts.js" />

@@ -11,25 +11,25 @@
 
   <ItemGroup>
     <Reference Include="StrmAssistantLite">
-      <HintPath>../../StrmAssistant/bin/Release/net8.0/StrmAssistantLite.dll</HintPath>
+      <HintPath>../../StrmAssistant/bin/Release/net6.0/StrmAssistantLite.dll</HintPath>
     </Reference>
     <Reference Include="TinyPinyin">
-      <HintPath>../../StrmAssistant/bin/Release/net8.0/TinyPinyin.dll</HintPath>
+      <HintPath>../../StrmAssistant/bin/Release/net6.0/TinyPinyin.dll</HintPath>
     </Reference>
     <Reference Include="ChineseConverter">
-      <HintPath>../../StrmAssistant/bin/Release/net8.0/ChineseConverter.dll</HintPath>
+      <HintPath>../../StrmAssistant/bin/Release/net6.0/ChineseConverter.dll</HintPath>
     </Reference>
     <Reference Include="Emby.Web.GenericEdit">
-      <HintPath>../../StrmAssistant/bin/Release/net8.0/Emby.Web.GenericEdit.dll</HintPath>
+      <HintPath>../../StrmAssistant/bin/Release/net6.0/Emby.Web.GenericEdit.dll</HintPath>
     </Reference>
     <Reference Include="MediaBrowser.Model">
-      <HintPath>../../StrmAssistant/bin/Release/net8.0/MediaBrowser.Model.dll</HintPath>
+      <HintPath>../../StrmAssistant/bin/Release/net6.0/MediaBrowser.Model.dll</HintPath>
     </Reference>
     <Reference Include="MediaBrowser.Common">
-      <HintPath>../../StrmAssistant/bin/Release/net8.0/MediaBrowser.Common.dll</HintPath>
+      <HintPath>../../StrmAssistant/bin/Release/net6.0/MediaBrowser.Common.dll</HintPath>
     </Reference>
     <Reference Include="MediaBrowser.Controller">
-      <HintPath>../../StrmAssistant/bin/Release/net8.0/MediaBrowser.Controller.dll</HintPath>
+      <HintPath>../../StrmAssistant/bin/Release/net6.0/MediaBrowser.Controller.dll</HintPath>
     </Reference>
   </ItemGroup>
 

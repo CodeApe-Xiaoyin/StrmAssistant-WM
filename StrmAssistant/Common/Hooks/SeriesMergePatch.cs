@@ -52,12 +52,8 @@ namespace StrmAssistant.Common.Hooks
                     options.MergeSeriesPreference != Options.ExperienceEnhanceOptions.MergeSeriesScopeOption.GlobalScope)
                     return;
 
-#if EMBY_LEGACY
-                // 4.8/4.9 拼 key 用的是 Id.ToString("N")（4.10 才有 IdString）
-                __result = StripLibraries(__result, collectionFolders?.Select(i => i.Id.ToString("N")).ToArray());
-#else
-                __result = StripLibraries(__result, collectionFolders?.Select(i => i.IdString).ToArray());
-#endif
+                // 4.10 拼 key 用 IdString，4.8/4.9 用 Id.ToString("N")，两者内容相同
+                __result = StripLibraries(__result, collectionFolders?.Select(i => i.IdStringCompat()).ToArray());
             }
             catch (Exception e)
             {

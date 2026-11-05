@@ -180,6 +180,18 @@ namespace StrmAssistant
             // 挂钩在部分环境下会导致进程退出，改为按需启用（见 PORT-NOTES）
 
 
+            // 全新安装时还没有配置文件：Emby 的 PluginOptionsStore 在第一次保存之前，每次 GetOptions() 都返回一个新的默认对象，
+            // 界面上第一次保存会改一个对象、存盘的却是另一个，改动丢失（4.9 新装实测：第一次弹窗保存不生效；4.8 / 4.10 代码相同）。
+            // 启动时先存一次默认值，之后 GetOptions() 才返回同一个对象。
+            try
+            {
+                if (!ReferenceEquals(GetOptions(), GetOptions())) SavePluginOptionsSuppress();
+            }
+            catch (System.Exception e)
+            {
+                Logger?.Info("首次保存默认配置失败（忽略）: " + e.Message);
+            }
+
             // 旧配置迁移（界面合并掉的重复选项）
             try
             {
@@ -632,7 +644,8 @@ namespace StrmAssistant
         /// <summary>界面（弹窗、仪表盘）改了设置后保存：补齐下拉列表与中文名再落盘，与页面保存一致。</summary>
         public void SaveOptionsFromUi()
         {
-            var options = OnBeforeShowUI(GetOptions()) ?? GetOptions();
+            var current = GetOptions();
+            var options = OnBeforeShowUI(current) ?? current;
             EnsureDynamicLists(options);
             Common.OptionLabels.Repair(options);
             SaveOptions(options);

@@ -104,9 +104,7 @@ namespace StrmAssistant.ScheduledTask
                         {
                             var refreshOptions = Plugin.MetadataApi.GetMetadataValidationRefreshOptions();
                             // 递归：季和分集的 SeriesPresentationUniqueKey 也要跟着换，否则合并后的剧集在下次扫库前显示 0 季 0 集
-#if !EMBY48
-                            refreshOptions.Recursive = true;
-#endif
+                            EmbyCompat.SetIfExists(refreshOptions, "Recursive", true); // 4.8 没有这个属性
 
                             await _providerManager.RefreshFullItem(series, refreshOptions, cancellationToken)
                                 .ConfigureAwait(false);
@@ -146,9 +144,7 @@ namespace StrmAssistant.ScheduledTask
 
                         var refreshOptions = Plugin.MetadataApi.GetMetadataValidationRefreshOptions();
                         // 递归：季和分集的 SeriesPresentationUniqueKey 也要跟着换，否则合并后的剧集在下次扫库前显示 0 季 0 集
-#if !EMBY48
-                        refreshOptions.Recursive = true;
-#endif
+                        EmbyCompat.SetIfExists(refreshOptions, "Recursive", true); // 4.8 没有这个属性
 
                         await _providerManager.RefreshFullItem(series, refreshOptions, cancellationToken)
                             .ConfigureAwait(false);

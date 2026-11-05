@@ -4,12 +4,9 @@ using System.Reflection;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Model.Querying;
 using StrmAssistant.Options;
-#if EMBY48
-// 4.8 没有 IDataContext：GetItemsResult 只有 (InternalItemsQuery) 一个重载，每次查询自己开连接
+// 4.8 没有 IDataContext（GetItemsResult 只有 (InternalItemsQuery) 一个重载，每次查询自己开连接），
+// 4.9+ 才有。插件按 4.8 接口编译，所以这里一律当 object 传，用到时反射调用。
 using DataContext = System.Object;
-#else
-using DataContext = MediaBrowser.Model.Data.IDataContext;
-#endif
 
 namespace StrmAssistant.Common.Hooks
 {
@@ -45,24 +42,20 @@ namespace StrmAssistant.Common.Hooks
                 var total = 0;
                 var messages = new System.Collections.Generic.List<string>();
 
-#if EMBY48
-                // 4.8 只有 GetItemsResult(InternalItemsQuery)，QueryItems 也走它
-                var r = HarmonyHelper.PatchPostfix(target, "GetItemsResult", postfix,
-                    "StrmAssistant.SearchEnhancement.GetItemsResult",
-                    m => m.GetParameters().Length == 1 && m.GetParameters()[0].ParameterType == typeof(InternalItemsQuery),
-                    out var patched);
-                total += patched;
-                messages.Add("GetItemsResult(query):" + (patched > 0 ? "ok(" + patched + ")" : "none"));
-#else
-                // 只挂最内层的 GetItemsResult(query, IDataContext, CancellationToken)（4.9 / 4.10 都有）：
+                // 4.9 / 4.10 有 GetItemsResult(query, IDataContext, CancellationToken)：只挂这个最内层的，
                 // QueryItems 和其它 GetItemsResult 重载最终都走到它，挂一处就够，也不会同一次查询被增强两遍。
+                // 4.8 没有 IDataContext，只有 GetItemsResult(InternalItemsQuery)，QueryItems 也走它。
+                var hasDataContext = target.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                    .Any(m => m.Name == "GetItemsResult" && m.GetParameters().Any(IsDataContext));
                 var r = HarmonyHelper.PatchPostfix(target, "GetItemsResult", postfix,
                     "StrmAssistant.SearchEnhancement.GetItemsResult",
-                    m => m.GetParameters().Any(p => p.ParameterType == typeof(DataContext)),
+                    hasDataContext
+                        ? (Func<MethodInfo, bool>)(m => m.GetParameters().Any(IsDataContext))
+                        : m => m.GetParameters().Length == 1 && m.GetParameters()[0].ParameterType == typeof(InternalItemsQuery),
                     out var patched);
                 total += patched;
-                messages.Add("GetItemsResult(dataContext):" + (patched > 0 ? "ok(" + patched + ")" : "none"));
-#endif
+                messages.Add((hasDataContext ? "GetItemsResult(dataContext):" : "GetItemsResult(query):") +
+                             (patched > 0 ? "ok(" + patched + ")" : "none"));
 
                 Installed = total > 0;
                 return string.Join(" | ", messages);
@@ -74,27 +67,35 @@ namespace StrmAssistant.Common.Hooks
             }
         }
 
-#if EMBY48
-        private static void Postfix(InternalItemsQuery query, ref QueryResult<BaseItem> __result)
+        private static bool IsDataContext(ParameterInfo p) => p.ParameterType.Name == "IDataContext";
+
+        /// <summary>两种挂点共用：4.8 的参数是 (query)，4.9+ 是 (query, dataContext, cancellationToken)。</summary>
+        private static void Postfix(object[] __args, ref QueryResult<BaseItem> __result)
         {
-            Enhance(query, null, System.Threading.CancellationToken.None, ref __result);
+            if (__args == null || __args.Length == 0 || !(__args[0] is InternalItemsQuery query)) return;
+            var dataContext = __args.Length > 1 ? __args[1] : null;
+            var token = __args.Length > 2 && __args[2] is System.Threading.CancellationToken t ? t : System.Threading.CancellationToken.None;
+            Enhance(query, dataContext, token, ref __result);
         }
-#else
-        private static void Postfix(InternalItemsQuery query, DataContext dataContext,
-            System.Threading.CancellationToken cancellationToken, ref QueryResult<BaseItem> __result)
-        {
-            Enhance(query, dataContext, cancellationToken, ref __result);
-        }
-#endif
+
+        private static MethodInfo _getItemsWithContext;
 
         private static QueryResult<BaseItem> RunQuery(InternalItemsQuery q, DataContext dataContext,
             System.Threading.CancellationToken cancellationToken)
         {
-#if EMBY48
+            if (dataContext != null)
+            {
+                // 4.9+：沿用原查询的数据库上下文（同一个连接 / 事务）
+                _getItemsWithContext ??= Plugin.LibraryManager.GetType().GetMethods()
+                    .FirstOrDefault(m => m.Name == "GetItemsResult" && m.GetParameters().Length == 3 &&
+                                         m.GetParameters()[0].ParameterType == typeof(InternalItemsQuery) &&
+                                         IsDataContext(m.GetParameters()[1]));
+                if (_getItemsWithContext != null)
+                    return (QueryResult<BaseItem>)_getItemsWithContext.Invoke(Plugin.LibraryManager,
+                        new[] { q, dataContext, cancellationToken });
+            }
+
             return Plugin.LibraryManager.GetItemsResult(q);
-#else
-            return Plugin.LibraryManager.GetItemsResult(q, dataContext, cancellationToken);
-#endif
         }
 
         private static void Enhance(InternalItemsQuery query, DataContext dataContext,

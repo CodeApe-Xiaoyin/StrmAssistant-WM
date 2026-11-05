@@ -92,7 +92,7 @@ namespace StrmAssistant.ScheduledTask
                             return;
                         }
 
-                        var chapters = _itemRepository.GetChapters(taskItem);
+                        var chapters = _itemRepository.GetChapters(taskItem, CancellationToken.None);
 
                         var thumbnailResult = false;
 

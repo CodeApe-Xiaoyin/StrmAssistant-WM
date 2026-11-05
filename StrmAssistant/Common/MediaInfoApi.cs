@@ -115,13 +115,9 @@ namespace StrmAssistant.Common
         private List<MediaSourceInfo> GetStaticMediaSourcesByApi(BaseItem item, bool enableAlternateMediaSources,
             LibraryOptions libraryOptions)
         {
-#if EMBY48
-            return _mediaSourceManager.GetStaticMediaSources(item, enableAlternateMediaSources, false,
-                libraryOptions, null, null);
-#else
-            return _mediaSourceManager.GetStaticMediaSources(item, enableAlternateMediaSources, false, false,
-                null, libraryOptions, null, null);
-#endif
+            // 4.8 是 6 个参数，4.9+ 是 8 个：运行时按实际签名调用
+            return EmbyCompat.GetStaticMediaSourcesCompat(_mediaSourceManager, item, enableAlternateMediaSources,
+                libraryOptions);
         }
 
         private List<MediaSourceInfo> GetStaticMediaSourcesByRef(BaseItem item, bool enableAlternateMediaSources,

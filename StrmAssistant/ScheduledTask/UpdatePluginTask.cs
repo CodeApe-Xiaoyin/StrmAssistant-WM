@@ -18,7 +18,7 @@ using System.Threading.Tasks;
 namespace StrmAssistant.ScheduledTask
 {
     /// <summary>
-    /// 更新插件：从 GitHub 仓库 CodeApe-Xiaoyin/StrmAssistant-WM 的最新 Release 下载与当前 Emby 版本对应的安装包，
+    /// 更新插件：从 GitHub 仓库 CodeApe-Xiaoyin/StrmAssistant-WM 的最新 Release 下载安装包（通用包，旧版按 Emby 版本分包），
     /// 解压覆盖插件目录（DLL、StrmAssistantDeps、语言包），重启 Emby 后生效。
     ///
     /// 以前指向上游 sjtuross/StrmAssistant，而上游的发布文件名和本插件对不上，实际只会报「下载地址无效」。
@@ -74,12 +74,15 @@ namespace StrmAssistant.ScheduledTask
             try
             {
                 // 走插件自己的 HTTP 客户端：填了代理地址就经代理访问 GitHub
-                using var http = Common.PluginHttp.Create(TimeSpan.FromMinutes(5));
+                // 超时由下面每个请求自己控制（查版本 30 秒，下载 5 分钟），这里不限
+                using var http = Common.PluginHttp.Create(System.Threading.Timeout.InfiniteTimeSpan);
                 http.DefaultRequestHeaders.UserAgent.ParseAdd("StrmAssistantLite/" + Plugin.Instance.CurrentVersion);
 
                 // 不走 api.github.com：未登录每小时只有 60 次，代理出口 IP 常被别人用光（实测 403 rate limit）。
                 // 改用 github.com 的 releases/latest 跳转拿版本号，再按固定文件名直接下载。
-                var latest = await http.GetAsync("https://github.com/" + Repo + "/releases/latest", cancellationToken).ConfigureAwait(false);
+                HttpResponseMessage latest;
+                using (var lookup = Deadline(cancellationToken, TimeSpan.FromSeconds(30)))
+                    latest = await http.GetAsync("https://github.com/" + Repo + "/releases/latest", lookup.Token).ConfigureAwait(false);
                 latest.EnsureSuccessStatusCode();
                 var finalUrl = latest.RequestMessage?.RequestUri?.ToString() ?? string.Empty;
                 var tag = finalUrl.Contains("/releases/tag/") ? Uri.UnescapeDataString(finalUrl.Substring(finalUrl.LastIndexOf('/') + 1)) : null;
@@ -104,10 +107,11 @@ namespace StrmAssistant.ScheduledTask
                     var url = "https://github.com/" + Repo + "/releases/download/" + Uri.EscapeDataString(tag) + "/" + name;
                     if (!string.IsNullOrWhiteSpace(about.GitHubProxy))
                         url = about.GitHubProxy.Trim().TrimEnd('/') + "/" + url;
-                    using var resp = await http.GetAsync(url, cancellationToken).ConfigureAwait(false);
+                    using var download = Deadline(cancellationToken, TimeSpan.FromMinutes(5));
+                    using var resp = await http.GetAsync(url, download.Token).ConfigureAwait(false);
                     if (resp.StatusCode == System.Net.HttpStatusCode.NotFound) continue;
                     resp.EnsureSuccessStatusCode();
-                    bytes = await resp.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
+                    bytes = await resp.Content.ReadAsByteArrayAsync(download.Token).ConfigureAwait(false);
                     picked = name;
                     break;
                 }
@@ -121,34 +125,44 @@ namespace StrmAssistant.ScheduledTask
                 progress.Report(95);
 
                 _logger.Info("UpdatePlugin - 已更新到 {0}，写入 {1} 个文件，重启 Emby 后生效", remote, written);
-                _activityManager.Create(new ActivityLogEntry
+                var done = new ActivityLogEntry
                 {
                     Name = "神医助手 已更新到 " + Short(remote) + "，重启 Emby 后生效",
-                    Type = "PluginUpdateInstalled",
-#if !EMBY48
-                    Severity = LogSeverity.Info
-#endif
-                });
+                    Type = "PluginUpdateInstalled"
+                };
+                EmbyCompat.SetIfExists(done, "Severity", "Info");
+                _activityManager.Create(done);
                 _ = Plugin.NotificationApi.SendMessageToAdmins("[神医助手] 已更新到 " + Short(remote) + "，重启 Emby 后生效", 1000);
                 _applicationHost.NotifyPendingRestart();
             }
-            catch (Exception e) when (!(e is OperationCanceledException))
+            catch (Exception e) when (!cancellationToken.IsCancellationRequested)
             {
+                // 用户没取消却超时了：当成失败报出来（以前会被 Emby 记成「已取消」，看不出原因）
+                if (e is OperationCanceledException)
+                    e = new TimeoutException("连接 GitHub 超时。可在「常规设置 → 网络代理」填代理，或在「更新插件 → 配置」填下载加速前缀");
                 _logger.Error("UpdatePlugin - 更新失败: {0}", e.Message);
-                _activityManager.Create(new ActivityLogEntry
+                var failed = new ActivityLogEntry
                 {
                     Name = "神医助手 更新失败",
                     Type = "PluginUpdateFailed",
-                    Overview = e.Message,
-#if !EMBY48
-                    Severity = LogSeverity.Error
-#endif
-                });
+                    Overview = e.Message
+                };
+                EmbyCompat.SetIfExists(failed, "Severity", "Error");
+                _activityManager.Create(failed);
                 _ = Plugin.NotificationApi.SendMessageToAdmins("[神医助手] 更新失败：" + e.Message, 1000);
-                throw; // 让 Emby 把这次运行记为失败，首页那一行会标红
+                // 让 Emby 把这次运行记为失败，首页那一行会标红（超时抛换过的异常，否则又会被记成「已取消」）
+                if (e is TimeoutException) throw e;
+                throw;
             }
 
             progress.Report(100);
+        }
+
+        private static CancellationTokenSource Deadline(CancellationToken outer, TimeSpan limit)
+        {
+            var cts = CancellationTokenSource.CreateLinkedTokenSource(outer);
+            cts.CancelAfter(limit);
+            return cts;
         }
 
         private static string Short(Version v) => v == null ? "?" : v.Build >= 0 ? $"{v.Major}.{v.Minor}.{v.Build}" : v.ToString();
@@ -168,11 +182,14 @@ namespace StrmAssistant.ScheduledTask
             return current == null || Norm(remote).CompareTo(Norm(current)) > 0;
         }
 
-        /// <summary>按优先顺序列出要尝试下载的安装包文件名：先找对应 Emby 主次版本的，再找通用包。</summary>
+        /// <summary>
+        /// 按优先顺序列出要尝试下载的安装包文件名：现在发布的是通用包（4.8 / 4.9 / 4.10 共用），
+        /// 找不到再找按 Emby 版本分开打的旧式包。
+        /// </summary>
         internal static IEnumerable<string> AssetCandidates(Version emby)
         {
-            if (emby != null) yield return "StrmAssistantLite-emby" + emby.Major + "." + emby.Minor + ".zip";
             yield return "StrmAssistantLite.zip";
+            if (emby != null) yield return "StrmAssistantLite-emby" + emby.Major + "." + emby.Minor + ".zip";
         }
 
         /// <summary>

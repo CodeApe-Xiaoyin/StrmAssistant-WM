@@ -1,6 +1,8 @@
 # 构建产物
 bin/
 obj/
+tools/*/bin/
+tools/*/obj/
 dist/
 *.user
 .vs/
